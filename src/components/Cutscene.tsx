@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { CS_H, CS_W, CUTSCENE, prepareScene } from '../game/cutscene';
 import { sound } from '../game/sound';
+import { pumpWarm, warmComplete } from '../game/cineKit';
+import { getQuality, isLite, onQualityChange, setQuality, type StoryQuality } from '../game/quality';
 import {
   PixelPauseIcon,
   PixelPlayIcon,
@@ -23,17 +25,29 @@ const SCENE_STARTS = CUTSCENE.map((_, index) =>
 const CUES: Record<string, Array<{ at: number; play: () => void }>> = {
   'sky-city': [{ at: 0.1, play: () => sound.playWhoosh(1.2) }],
   birth: [{ at: 1.8, play: () => sound.playUpgrade() }],
-  'cast-out': [{ at: 3.8, play: () => sound.playWhoosh(0.7) }],
+  outdated: [{ at: 6.6, play: () => sound.playWhoosh(0.6) }],
+  'cast-out': [
+    { at: 1.5, play: () => sound.playWhoosh(0.4) },
+    { at: 3.3, play: () => sound.playHurt() },
+    { at: 7.95, play: () => sound.playWhoosh(0.9) },
+  ],
   'free-fall': [{ at: 0.3, play: () => sound.playWhoosh(1.3) }],
   impact: [{ at: 0.87, play: () => sound.playExplosion() }],
   'old-mine': [{ at: 0.3, play: () => sound.playWhoosh(1.0) }],
   'self-repair': [
-    { at: 1.2, play: () => sound.playTorch() },
-    { at: 5.2, play: () => sound.playUpgrade() },
+    { at: 1.1, play: () => sound.playTorch() },
+    { at: 3.3, play: () => sound.playTorch() },
+    { at: 5.45, play: () => sound.playTorch() },
+    { at: 7.5, play: () => sound.playTorch() },
+    { at: 8.8, play: () => sound.playUpgrade() },
   ],
   survivors: [{ at: 4.7, play: () => sound.playOreCollect(120) }],
   'the-deal': [{ at: 3, play: () => sound.playUpgrade() }],
   'first-shift': [{ at: 0.7, play: () => sound.playWhoosh(1.0) }],
+  'sulfured-caves': [
+    { at: 2.6, play: () => sound.playWhoosh(0.5) },
+    { at: 11.4, play: () => sound.playOreCollect(90) },
+  ],
 };
 
 const grainFrames: HTMLCanvasElement[] = [];
@@ -73,13 +87,32 @@ export function Cutscene({ onFinish }: CutsceneProps) {
   const finishedRef = useRef(false);
   const pausedRef = useRef(false);
   const progressRef = useRef<HTMLDivElement | null>(null);
+  const captionRef = useRef<HTMLSpanElement | null>(null);
+  const cursorRef = useRef<HTMLSpanElement | null>(null);
+  const clockRef = useRef<HTMLSpanElement | null>(null);
+  // Set by seek() so the very next animation frame repaints, even in Lite mode
+  // or while the paint gate is closed. Prevents a stale/blank frame after a
+  // rapid skip.
+  const needsPaintRef = useRef(true);
   const lastUiUpdateRef = useRef(0);
-  const preloadedRef = useRef(-1);
+  const switchedRef = useRef(false);
 
   const [sceneIndex, setSceneIndex] = useState(0);
   const [charCount, setCharCount] = useState(0);
-  const [seconds, setSeconds] = useState(0);
   const [paused, setPaused] = useState(false);
+  const [quality, setQualityState] = useState<StoryQuality>(getQuality());
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => onQualityChange((q) => setQualityState(q)), []);
+  useEffect(() => {
+    if (!notice) return;
+    const id = window.setTimeout(() => setNotice(null), 4200);
+    return () => window.clearTimeout(id);
+  }, [notice]);
+  const toggleQuality = useCallback(() => {
+    switchedRef.current = true;
+    setQuality(isLite() ? 'hd' : 'lite');
+    sound.playUiTick();
+  }, []);
   pausedRef.current = paused;
 
   const finish = useCallback(() => {
@@ -101,8 +134,8 @@ export function Cutscene({ onFinish }: CutsceneProps) {
     firedCues.current.clear();
     setSceneIndex(target);
     setCharCount(0);
-    setSeconds(SCENE_STARTS[target]);
     setPaused(false);
+    needsPaintRef.current = true;
     if (interactive) sound.playUiTick();
     prepareScene(target);
   }, [finish]);
@@ -147,8 +180,39 @@ export function Cutscene({ onFinish }: CutsceneProps) {
     previousCtx.imageSmoothingEnabled = false;
 
     let raf = 0;
+    let needsPaint = true;
+    let lastIndex = -1;
+    let hasPrevious = false;
+    let lastPaint = 0;
+    let layerScale = 1;
+    let costAvg = 0;
+    let paintedFrames = 0;
+    const configureLayerScale = () => {
+      const next = isLite() ? 0.4 : 1;
+      canvas.dataset.storyScale = next === 0.4 ? '256x144' : '640x360';
+      canvas.dataset.storyPixelsPerSecond = next === 0.4 ? "663552" : "13824000";
+      if (next === layerScale) return;
+      layerScale = next;
+      const w = CS_W * layerScale;
+      const h = CS_H * layerScale;
+      // Lite paints at 320x180 and is nearest-neighbour enlarged on screen.
+      currentLayer.width = w;
+      currentLayer.height = h;
+      previousLayer.width = w;
+      previousLayer.height = h;
+      sceneCtx.imageSmoothingEnabled = false;
+      previousCtx.imageSmoothingEnabled = false;
+      sceneCtx.setTransform(layerScale, 0, 0, layerScale, 0, 0);
+      previousCtx.setTransform(layerScale, 0, 0, layerScale, 0, 0);
+      hasPrevious = false;
+      lastIndex = -1;
+      needsPaint = true;
+    };
+    screen.imageSmoothingEnabled = false;
     finishedRef.current = false;
+    configureLayerScale();
     prepareScene(0);
+    const stopQuality = onQualityChange(() => configureLayerScale());
 
     function render(now: number) {
       const elapsed = lastFrameRef.current ? Math.min(0.07, (now - lastFrameRef.current) / 1000) : 0;
@@ -158,50 +222,99 @@ export function Cutscene({ onFinish }: CutsceneProps) {
       const index = sceneRef.current;
       const scene = CUTSCENE[index];
       const time = timeRef.current;
+      const lite = isLite();
+      // Heavy procedural environments are built a few ms per frame, well ahead of
+      // time. Budget adapts: build faster while the current frame is cheap, and
+      // only use leftover time when the current scene itself is expensive.
+      // (pumped AFTER the scene is painted — see below — so it only uses time
+      //  genuinely left over in this frame.)
 
-      if (!pausedRef.current) {
-        sceneCtx.clearRect(0, 0, CS_W, CS_H);
+      // Lite paints at ~18 fps into 256x144. Story time and audio stay full-rate.
+      const due = !lite || now - lastPaint >= 56;
+      const urgent = needsPaintRef.current;
+      if ((!pausedRef.current && due) || needsPaint || urgent) {
+        needsPaint = false;
+        needsPaintRef.current = false;
+        lastPaint = now;
+        if (index !== lastIndex) {
+          // Freeze the outgoing scene's last frame for the dissolve instead of re-rendering it.
+          if (lastIndex >= 0) {
+            previousCtx.setTransform(1, 0, 0, 1, 0, 0);
+            previousCtx.clearRect(0, 0, CS_W, CS_H);
+            previousCtx.drawImage(currentLayer, 0, 0);
+            previousCtx.setTransform(layerScale, 0, 0, layerScale, 0, 0);
+            hasPrevious = true;
+          }
+          lastIndex = index;
+        }
+        const t0 = performance.now();
+        sceneCtx.setTransform(1, 0, 0, 1, 0, 0);
+        sceneCtx.globalAlpha = 1;
+        sceneCtx.globalCompositeOperation = 'source-over';
+        sceneCtx.clearRect(0, 0, currentLayer.width, currentLayer.height);
+        sceneCtx.setTransform(layerScale, 0, 0, layerScale, 0, 0);
         sceneCtx.save();
         scene.draw(sceneCtx, Math.min(time, scene.duration), scene.duration);
         sceneCtx.restore();
+        const cost = performance.now() - t0;
 
-        // Dissolve between complete rendered frames. The two scenes cannot change
-        // the alpha of the final composite accidentally.
-        if (index > 0 && time < DISSOLVE) {
-          previousCtx.clearRect(0, 0, CS_W, CS_H);
-          const previous = CUTSCENE[index - 1];
-          previousCtx.save();
-          previous.draw(previousCtx, previous.duration - DISSOLVE + time, previous.duration);
-          previousCtx.restore();
-          screen.drawImage(previousLayer, 0, 0);
+        if (hasPrevious && time < DISSOLVE) {
+          screen.drawImage(previousLayer, 0, 0, CS_W, CS_H);
           screen.globalAlpha = easeCubic(time / DISSOLVE);
-          screen.drawImage(currentLayer, 0, 0);
+          screen.drawImage(currentLayer, 0, 0, CS_W, CS_H);
           screen.globalAlpha = 1;
         } else {
-          screen.drawImage(currentLayer, 0, 0);
+          screen.drawImage(currentLayer, 0, 0, CS_W, CS_H);
+        }
+        if (!lite) {
+          screen.globalAlpha = 0.12;
+          screen.drawImage(grain(Math.floor(now / 85)), 0, 0);
+          screen.globalAlpha = 1;
         }
 
-        screen.globalAlpha = 0.12;
-        screen.drawImage(grain(Math.floor(now / 85)), 0, 0);
-        screen.globalAlpha = 1;
+        // Auto-switch to Lite when HD can't hold ~55 fps (only if the player hasn't chosen).
+        if (!pausedRef.current && time > 0.6) {
+          paintedFrames++;
+          costAvg = paintedFrames === 1 ? cost : costAvg * 0.9 + cost * 0.1;
+          if (!lite && !switchedRef.current && paintedFrames > 60 && costAvg > 14) {
+            switchedRef.current = true;
+            setQuality('lite', false);
+            setNotice('LITE MODE ON — smoother playback on this device');
+          }
+        }
 
         const chars = revealedRef.current
           ? scene.text.length
           : Math.min(scene.text.length, Math.max(0, Math.floor((time - 0.28) * LETTER_RATE)));
         if (chars !== paintedCharsRef.current) {
           paintedCharsRef.current = chars;
-          setCharCount(chars);
+          // Typewriter writes straight to the DOM (46 updates/s would otherwise
+          // re-render the whole player through React every frame).
+          if (captionRef.current) captionRef.current.textContent = scene.text.slice(0, chars);
+          if (cursorRef.current) cursorRef.current.style.display = chars >= scene.text.length ? 'none' : '';
+          if (chars >= scene.text.length) setCharCount(chars);
         }
         const globalTime = SCENE_STARTS[index] + time;
-        // Text clock updates five times a second; the art and bar stay at RAF speed.
-        if (now - lastUiUpdateRef.current > 200) {
+        if (now - lastUiUpdateRef.current > 500) {
           lastUiUpdateRef.current = now;
-          setSeconds(Math.min(STORY_LENGTH, globalTime));
+          if (clockRef.current) clockRef.current.textContent = `${formatTime(Math.min(STORY_LENGTH, globalTime))} / ${formatTime(STORY_LENGTH)}`;
         }
         if (progressRef.current) {
           progressRef.current.style.width = `${Math.min(100, (globalTime / STORY_LENGTH) * 100)}%`;
         }
-
+      }
+      // Background environment builds: on EVERY tick (painted or not) spend only
+      // what is genuinely left of a 60 fps frame, minus a compositing margin.
+      // Small, frequent slices never push a frame over budget; big rare ones do.
+      // Background environment builds. ALWAYS make progress — even on a busy HD
+      // frame. Without the floor below, a heavy set (the 1920x960 caldera is
+      // ~450 ms of work) can never finish when every frame is over budget, and
+      // the scene stays on its placeholder forever ("story won't render").
+      if (!warmComplete()) {
+        const left = 16.7 - (performance.now() - now) - 2.5;
+        pumpWarm(Math.max(1.4, Math.min(6, left)));
+      }
+      if (!pausedRef.current) {
         for (const [cueIndex, cue] of (CUES[scene.id] || []).entries()) {
           if (time >= cue.at && !firedCues.current.has(cueIndex)) {
             cue.play();
@@ -211,13 +324,6 @@ export function Cutscene({ onFinish }: CutsceneProps) {
         if (time >= scene.duration + (index === CUTSCENE.length - 1 ? 1.2 : 0)) {
           seek(index + 1, false);
         }
-        if (index + 1 < CUTSCENE.length && preloadedRef.current !== index) {
-          preloadedRef.current = index;
-          // Warm only the next static set, not every large canvas at startup.
-          window.setTimeout(() => {
-            if (!finishedRef.current) prepareScene(index + 1);
-          }, 100);
-        }
       }
       if (!finishedRef.current) raf = requestAnimationFrame(render);
     }
@@ -225,6 +331,7 @@ export function Cutscene({ onFinish }: CutsceneProps) {
     raf = requestAnimationFrame(render);
     return () => {
       cancelAnimationFrame(raf);
+      stopQuality();
       finishedRef.current = true;
     };
   }, [seek]);
@@ -240,6 +347,9 @@ export function Cutscene({ onFinish }: CutsceneProps) {
       } else if (event.code === 'ArrowLeft') {
         event.preventDefault();
         seek(sceneRef.current - 1);
+      } else if (event.code === 'KeyL') {
+        event.preventDefault();
+        toggleQuality();
       } else if (event.code === 'KeyP') {
         event.preventDefault();
         setPaused((value) => !value);
@@ -247,7 +357,7 @@ export function Cutscene({ onFinish }: CutsceneProps) {
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [advance, finish, seek]);
+  }, [advance, finish, seek, toggleQuality]);
 
   const scene = CUTSCENE[sceneIndex];
   const complete = charCount >= scene.text.length;
@@ -264,9 +374,19 @@ export function Cutscene({ onFinish }: CutsceneProps) {
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1 sm:gap-2">
-          <span className="font-retro hidden pr-2 text-base tabular-nums text-[#a9a2ac] sm:inline">
-            {formatTime(seconds)} / {formatTime(STORY_LENGTH)}
+          <span ref={clockRef} className="font-retro hidden pr-2 text-base tabular-nums text-[#a9a2ac] sm:inline">
+            {formatTime(SCENE_STARTS[sceneIndex])} / {formatTime(STORY_LENGTH)}
           </span>
+          <button
+            type="button"
+            className={`cinematic-control cinematic-quality ${quality === 'lite' ? 'is-lite' : ''}`}
+            aria-label={quality === 'lite' ? 'Lite mode on. Switch to HD quality' : 'HD quality on. Switch to Lite mode'}
+            aria-pressed={quality === 'lite'}
+            title={quality === 'lite' ? 'Lite mode: 30 fps, fewer effects (L)' : 'HD: full effects (L)'}
+            onClick={toggleQuality}
+          >
+            <span className="font-pixel text-[8px]">{quality === 'lite' ? 'LITE' : 'HD'}</span>
+          </button>
           <button
             type="button"
             className="cinematic-control"
@@ -297,6 +417,11 @@ export function Cutscene({ onFinish }: CutsceneProps) {
             }}
             aria-label="Story scene. Tap to advance narration."
           />
+          {notice && (
+            <div role="status" className="pointer-events-none absolute left-1/2 top-2 -translate-x-1/2 border border-[#5a4751] bg-[#120e16]/90 px-2 py-1 font-pixel text-[7px] text-[#f1d6ac] sm:text-[8px]">
+              {notice} · PRESS L FOR HD
+            </div>
+          )}
           {paused && (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-[#08070c]/55">
               <span className="font-pixel text-xs tracking-[0.16em] text-[#ffe1a8]">STORY PAUSED</span>
@@ -319,8 +444,10 @@ export function Cutscene({ onFinish }: CutsceneProps) {
                 aria-label={`Go to chapter ${index + 1}: ${chapter.chapter}`}
                 aria-current={index === sceneIndex ? 'step' : undefined}
                 onClick={() => seek(index)}
-                className={`cinematic-chapter h-6 flex-1 border-t-2 ${index === sceneIndex ? 'border-[#ffdc9a]' : index < sceneIndex ? 'border-[#7e5c43]' : 'border-[#34303a]'}`}
-              />
+                className={`cinematic-chapter h-7 min-w-0 flex-1 border-t-2 font-pixel text-[7px] ${index === sceneIndex ? 'border-[#ffdc9a] text-[#ffdc9a]' : index < sceneIndex ? 'border-[#7e5c43] text-[#b6a08a]' : 'border-[#34303a] text-[#827986]'}`}
+              >
+                {(index + 1).toString().padStart(2, '0')}
+              </button>
             ))}
           </div>
           <div className="mt-1 flex min-h-[78px] items-center gap-2.5 sm:gap-4">
@@ -334,8 +461,8 @@ export function Cutscene({ onFinish }: CutsceneProps) {
                 {scene.speaker ? scene.speaker.toUpperCase() : 'ARCHIVE TRANSMISSION'}
               </div>
               <p className="font-retro mt-1 text-[17px] leading-[1.08] text-[#eee3d2] sm:text-[22px]">
-                {scene.text.slice(0, charCount)}
-                {!complete && <span className="cinematic-cursor ml-0.5 inline-block h-3 w-1.5 bg-[#eac27f]" />}
+                <span ref={captionRef} key={scene.id}>{scene.text.slice(0, charCount)}</span>
+                <span ref={cursorRef} className="cinematic-cursor ml-0.5 inline-block h-3 w-1.5 bg-[#eac27f]" style={{ display: complete ? 'none' : '' }} />
               </p>
             </div>
             <button type="button" onClick={advance} className="cinematic-next shrink-0" aria-label={complete ? 'Next scene' : 'Show complete caption'}>

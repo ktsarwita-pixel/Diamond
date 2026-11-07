@@ -627,6 +627,8 @@ export function App() {
       {showTitle && (
         <TitleScreen
           hasSave={hasSave}
+          muted={muted}
+          onToggleMute={handleToggleMute}
           onOpenAdmin={handleOpenAdmin}
           onOpenGuide={() => setGuideOpen(true)}
           onWatchStory={() => {

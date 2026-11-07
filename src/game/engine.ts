@@ -17,7 +17,9 @@ import {
 import { sound } from './sound';
 import { shade, sprites } from './sprites';
 import { CHARACTERS, NPC_LINES, Npc, createNpcs, drawCubeMiner } from './characters';
-import { drawCachedNpc } from './cutsceneArt';
+import { drawWorldHuman } from './cineHumans';
+import { BUILDING_BOUNDS, drawBuilding, type BuildingKind } from './outpostArt';
+import { cable, px } from './pixelCraft';
 import {
   AchievementDef,
   ActiveBomb,
@@ -227,18 +229,19 @@ export class GameEngine {
       // Soft contact shadow
       ctx.fillStyle = 'rgba(8,6,14,0.35)';
       ctx.fillRect(Math.round(n.x) - 5, groundY - 1, 10, 2);
-      drawCachedNpc(
+      drawWorldHuman(
         ctx, n.id, n.x, groundY, info.look,
-        walking ? 'walk' : n.waveTimer > 0 ? 'wave' : 'idle',
+        walking ? 'walk' : n.waveTimer > 0 ? 'wave' : n.id === 'gus' && Math.sin(this.time * 0.2) > 0.7 ? 'kneel' : 'hold',
         walking ? n.walkPhase / 8 : this.time + n.homeX,
         n.facing,
-        n.id === 'gus' ? 'wrench' : n.id === 'ilse' ? 'lantern' : n.id === 'mara' ? 'clipboard' : null
+        n.id === 'gus' ? 'wrench' : n.id === 'ilse' ? 'lantern' : n.id === 'mara' ? 'clipboard' : null,
+        !!n.bubble
       );
 
       const near = Math.abs(this.player.x - n.x) < 70 && Math.floor(this.player.y / TILE_SIZE) <= SURFACE_Y;
       // The speech line itself renders in React; canvas only draws a compact name tag.
       if (near) {
-        const headY = groundY - (info.look.small ? 23 : 31);
+        const headY = groundY - (info.look.small ? 30 : 39);
         const bob = Math.sin(this.time * 4 + n.homeX) * 1.5;
         ctx.font = 'bold 6px "Press Start 2P", monospace';
         ctx.textAlign = 'center';
@@ -258,7 +261,7 @@ export class GameEngine {
     const talking = this.npcs.find((n) => n.bubble);
     if (!talking) return null;
     const info = CHARACTERS[talking.id];
-    const headY = SURFACE_Y * TILE_SIZE - (info.look?.small ? 23 : 31);
+    const headY = SURFACE_Y * TILE_SIZE - (info.look?.small ? 30 : 39);
     const rawX = (talking.x - this.camX) * this.zoom + this.viewW / 2;
     const rawY = (headY - this.camY) * this.zoom + this.viewH / 2;
     // Dismiss automatically if the player goes deep underground or far away
@@ -1756,6 +1759,7 @@ export class GameEngine {
       lowHull: p.hull / p.maxHull < 0.3,
       lowFuel: p.fuel / p.maxFuel < 0.2,
       cargoFull: this.getCargoCount() >= this.getCargoCapacity(),
+      groundY: p.onGround ? ry + p.height / 2 : undefined,
     });
 
     this.renderParticles(ctx);
@@ -1928,337 +1932,47 @@ export class GameEngine {
   }
 
   private renderSurfaceOutpost(ctx: CanvasRenderingContext2D) {
-    const groundY = SURFACE_Y * TILE_SIZE;
+    const ground = SURFACE_Y * TILE_SIZE;
     const t = this.time;
+    const nearby = this.getNearbyBuilding();
+    const upgrades = this.player.upgrades;
+    const tier = Math.min(3, Math.floor((upgrades.drill + upgrades.armor + upgrades.thruster) / 4));
 
-    /* ---------- REFINERY DEPOT (Upgraded Industrial Smelter) ---------- */
-    {
-      const rx = OUTPOST_ZONES.REFINERY.startX * TILE_SIZE + 6;
-      const rw = 8 * TILE_SIZE + 4;
-      const rh = 52;
-      const topY = groundY - rh;
-
-      // Twin industrial smokestacks + staggered rising smoke plumes
-      for (const [cxOff, hOff] of [[10, 26], [26, 20]] as const) {
-        ctx.fillStyle = '#08060e';
-        ctx.fillRect(rx + cxOff, topY - hOff, 12, hOff + 2);
-        ctx.fillStyle = '#3d3849';
-        ctx.fillRect(rx + cxOff + 1, topY - hOff + 1, 10, hOff);
-        ctx.fillStyle = '#685e7a';
-        ctx.fillRect(rx + cxOff + 1, topY - hOff + 1, 3, hOff);
-        ctx.fillStyle = '#d97706';
-        ctx.fillRect(rx + cxOff, topY - hOff + 3, 12, 2);
-      }
-      ctx.globalCompositeOperation = 'lighter';
-      for (let i = 0; i < 6; i++) {
-        const life = (t * 0.38 + i * 0.16) % 1;
-        const stackX = i % 2 === 0 ? rx + 13 : rx + 29;
-        const sx = stackX + Math.sin(life * 6 + i) * 5 + life * 4;
-        const sy = topY - 28 - life * 36;
-        const size = 3 + life * 8;
-        ctx.fillStyle = `rgba(220, 198, 128, ${0.22 * (1 - life)})`;
-        ctx.fillRect(Math.round(sx), Math.round(sy), Math.round(size), Math.round(size));
-      }
-      ctx.globalCompositeOperation = 'source-over';
-
-      // External ore intake hopper & moving conveyor belt on left side
-      ctx.fillStyle = '#08060e';
-      ctx.fillRect(rx - 14, groundY - 22, 16, 22);
-      ctx.fillStyle = '#473e54';
-      ctx.fillRect(rx - 12, groundY - 20, 12, 10);
-      ctx.fillStyle = '#262030';
-      ctx.fillRect(rx - 12, groundY - 9, 14, 9);
-      const beltOff = Math.floor(t * 16) % 4;
-      ctx.fillStyle = '#eab308';
-      for (let bx = rx - 11 + beltOff; bx < rx; bx += 4) {
-        ctx.fillRect(bx, groundY - 12, 2, 2);
-      }
-
-      // Main Smelter Structure
-      ctx.fillStyle = '#08060e';
-      ctx.fillRect(rx, topY, rw, rh);
-      ctx.fillStyle = '#332d3d';
-      ctx.fillRect(rx + 2, topY + 2, rw - 4, rh - 2);
-      ctx.fillStyle = '#4f465e';
-      ctx.fillRect(rx + 2, topY + 2, rw - 4, 4);
-      // Corrugated wall ribbing & horizontal girder
-      ctx.fillStyle = '#241f2e';
-      for (let x = rx + 5; x < rx + rw - 4; x += 6) ctx.fillRect(x, topY + 8, 2, rh - 10);
-      ctx.fillStyle = '#1b1724';
-      ctx.fillRect(rx + 2, topY + 28, rw - 4, 3);
-
-      // Stepped Roof + hazard trim
-      ctx.fillStyle = '#08060e';
-      ctx.fillRect(rx - 3, topY - 4, rw + 6, 6);
-      ctx.fillStyle = '#d97706';
-      ctx.fillRect(rx - 2, topY - 3, rw + 4, 4);
-      ctx.fillStyle = '#fde047';
-      for (let x = rx - 2; x < rx + rw + 2; x += 8) ctx.fillRect(x, topY - 3, 4, 4);
-
-      // Roaring Blast Furnace Mouth + Molten Ingot Mold Trough
-      ctx.fillStyle = '#08060e';
-      ctx.fillRect(rx + 8, groundY - 22, 28, 22);
-      const heat = 0.65 + 0.35 * Math.sin(t * 5.5);
-      ctx.fillStyle = '#7c2d12';
-      ctx.fillRect(rx + 10, groundY - 20, 24, 20);
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.fillStyle = `rgba(249,115,22,${0.55 + heat * 0.35})`;
-      ctx.fillRect(rx + 12, groundY - 18, 20, 18);
-      ctx.fillStyle = `rgba(254,240,138,${0.45 + heat * 0.5})`;
-      ctx.fillRect(rx + 14, groundY - 12, 16, 12);
-      ctx.globalCompositeOperation = 'source-over';
-      // Furnace grate bars
-      ctx.fillStyle = '#1c1917';
-      for (let x = rx + 13; x < rx + 33; x += 4) ctx.fillRect(x, groundY - 18, 1, 17);
-
-      // Molten gold pouring into ingot molds on the right
-      ctx.fillStyle = '#08060e';
-      ctx.fillRect(rx + 42, groundY - 10, 44, 10);
-      ctx.fillStyle = '#292524';
-      ctx.fillRect(rx + 44, groundY - 8, 40, 8);
-      for (let m = 0; m < 3; m++) {
-        ctx.fillStyle = '#f59e0b';
-        ctx.fillRect(rx + 46 + m * 12, groundY - 6, 9, 4);
-        ctx.fillStyle = '#fef08a';
-        ctx.fillRect(rx + 47 + m * 12, groundY - 6, 7, 2);
-      }
-
-      // Signboard
-      const flick = Math.sin(t * 13) > -0.85 ? 1 : 0.45;
-      ctx.fillStyle = '#08060e';
-      ctx.fillRect(rx + 42, topY + 8, 82, 18);
-      ctx.fillStyle = '#1f1a2b';
-      ctx.fillRect(rx + 44, topY + 10, 78, 14);
-      ctx.fillStyle = '#eab308';
-      ctx.fillRect(rx + 44, topY + 10, 78, 1);
-      ctx.globalAlpha = flick;
-      ctx.fillStyle = '#fde047';
-      ctx.font = 'bold 8px "Press Start 2P", monospace';
-      ctx.fillText('$ REFINERY', rx + 49, topY + 21);
-      ctx.globalAlpha = 1;
-    }
-
-    /* ---------- MINE SHAFT GANTRY ---------- */
-    {
-      const sx = OUTPOST_ZONES.SHAFT.startX * TILE_SIZE;
-      const sw = (OUTPOST_ZONES.SHAFT.endX - OUTPOST_ZONES.SHAFT.startX + 1) * TILE_SIZE;
-      const cx = sx + sw / 2;
-
-      // Headframe posts + cross braces
-      ctx.fillStyle = '#08060e';
-      ctx.fillRect(sx + 4, groundY - 42, 7, 42);
-      ctx.fillRect(sx + sw - 11, groundY - 42, 7, 42);
-      ctx.fillStyle = '#64748b';
-      ctx.fillRect(sx + 5, groundY - 41, 5, 41);
-      ctx.fillRect(sx + sw - 10, groundY - 41, 5, 41);
-      ctx.fillStyle = '#94a3b8';
-      ctx.fillRect(sx + 5, groundY - 41, 2, 41);
-      // Diagonal braces
-      ctx.fillStyle = '#475569';
-      for (let i = 0; i < 4; i++) {
-        const by = groundY - 38 + i * 10;
-        ctx.fillRect(sx + 11, by, sw - 22, 2);
-        ctx.fillRect(sx + 11 + i * 4, by, 2, 10);
-        ctx.fillRect(sx + sw - 13 - i * 4, by, 2, 10);
-      }
-      // Top beam + blinking warning beacons
-      ctx.fillStyle = '#08060e';
-      ctx.fillRect(sx, groundY - 46, sw, 7);
-      ctx.fillStyle = '#eab308';
-      ctx.fillRect(sx + 1, groundY - 45, sw - 2, 5);
-      ctx.fillStyle = '#1c1917';
-      for (let x = sx + 2; x < sx + sw - 2; x += 6) ctx.fillRect(x, groundY - 45, 3, 5);
-
-      const beaconOn = Math.floor(t * 2) % 2 === 0;
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.fillStyle = beaconOn ? 'rgba(255,80,80,0.95)' : 'rgba(120,30,30,0.5)';
-      ctx.fillRect(sx + 6, groundY - 50, 4, 4);
-      ctx.fillRect(sx + sw - 10, groundY - 50, 4, 4);
-      if (beaconOn) {
-        ctx.fillStyle = 'rgba(255,60,60,0.22)';
-        ctx.fillRect(sx + 2, groundY - 54, 12, 12);
-        ctx.fillRect(sx + sw - 14, groundY - 54, 12, 12);
-      }
-      ctx.globalCompositeOperation = 'source-over';
-
-      // Pulley wheel that rotates with mining activity
-      ctx.fillStyle = '#08060e';
-      ctx.fillRect(cx - 6, groundY - 40, 12, 12);
-      ctx.fillStyle = '#8b93a5';
-      ctx.fillRect(cx - 5, groundY - 39, 10, 10);
-      ctx.fillStyle = '#2b303b';
-      const spin = Math.floor(t * 3) % 4;
-      ctx.fillRect(cx - 1 + (spin === 0 ? -3 : spin === 1 ? 3 : 0), groundY - 35 + (spin === 2 ? -3 : spin === 3 ? 3 : 0), 2, 2);
-
-      // Shaft interior with rails + descending cage cable
-      ctx.fillStyle = 'rgba(8,6,14,0.72)';
-      ctx.fillRect(sx + 16, groundY, sw - 32, 10 * TILE_SIZE);
-      ctx.fillStyle = '#334155';
-      ctx.fillRect(sx + 20, groundY, 2, 10 * TILE_SIZE);
-      ctx.fillRect(sx + sw - 22, groundY, 2, 10 * TILE_SIZE);
-      ctx.fillStyle = '#1e293b';
-      for (let y = groundY; y < groundY + 10 * TILE_SIZE; y += 12) {
-        ctx.fillRect(sx + 20, y, sw - 40, 1);
-      }
-      // Moving cage
-      const cageY = groundY + ((t * 22) % (10 * TILE_SIZE));
-      ctx.fillStyle = '#08060e';
-      ctx.fillRect(cx - 9, cageY - 8, 18, 12);
-      ctx.fillStyle = '#7c6a4f';
-      ctx.fillRect(cx - 8, cageY - 7, 16, 10);
-      ctx.fillStyle = '#fde047';
-      ctx.fillRect(cx - 3, cageY - 5, 6, 3);
-
-      // Bobbing prompt arrow
-      const bob = Math.sin(t * 4) * 2;
-      ctx.fillStyle = 'rgba(8,6,14,0.75)';
-      ctx.fillRect(cx - 34, groundY - 26 + bob, 68, 12);
-      ctx.fillStyle = '#fde047';
-      ctx.font = 'bold 7px "Press Start 2P", monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText('▼ MINE SHAFT ▼', cx, groundY - 17 + bob);
-      ctx.textAlign = 'left';
-    }
-
-    /* ---------- DRILL FORGE (Upgraded Mechanical & Plasma Workshop) ---------- */
-    {
-      const fx = OUTPOST_ZONES.FORGE.startX * TILE_SIZE + 2;
-      const fw = 8 * TILE_SIZE + 4;
-      const fh = 50;
-      const topY = groundY - fh;
-
-      // Roof gantry crane jib + suspended spare drill bit
-      ctx.fillStyle = '#08060e';
-      ctx.fillRect(fx + 10, topY - 16, 4, 16);
-      ctx.fillRect(fx + 8, topY - 18, 38, 4);
-      ctx.fillStyle = '#64748b';
-      ctx.fillRect(fx + 11, topY - 15, 2, 15);
-      ctx.fillRect(fx + 9, topY - 17, 36, 2);
-      const hoistX = fx + 28 + Math.round(Math.sin(t * 1.4) * 6);
-      ctx.fillStyle = '#94a3b8';
-      ctx.fillRect(hoistX, topY - 14, 1, 8);
-      ctx.fillStyle = '#f59e0b';
-      ctx.fillRect(hoistX - 3, topY - 7, 7, 4);
-
-      // Main Forge Structure
-      ctx.fillStyle = '#08060e';
-      ctx.fillRect(fx, topY, fw, fh);
-      ctx.fillStyle = '#26303f';
-      ctx.fillRect(fx + 2, topY + 2, fw - 4, fh - 2);
-      ctx.fillStyle = '#3b4c63';
-      ctx.fillRect(fx + 2, topY + 2, fw - 4, 4);
-      for (let x = fx + 6; x < fx + fw - 4; x += 8) {
-        ctx.fillStyle = '#1e2633';
-        ctx.fillRect(x, topY + 8, 2, fh - 10);
-      }
-      ctx.fillStyle = '#08060e';
-      ctx.fillRect(fx - 3, topY - 4, fw + 6, 6);
-      ctx.fillStyle = '#0ea5e9';
-      ctx.fillRect(fx - 2, topY - 3, fw + 4, 4);
-      ctx.fillStyle = '#7dd3fc';
-      ctx.fillRect(fx - 2, topY - 3, fw + 4, 1);
-
-      // Plasma-arc fabrication bay door with scanning laser & welding flash
-      ctx.fillStyle = '#08060e';
-      ctx.fillRect(fx + 10, groundY - 26, 34, 26);
-      ctx.fillStyle = '#15202e';
-      ctx.fillRect(fx + 12, groundY - 24, 30, 24);
-      ctx.fillStyle = '#0c1520';
-      for (let y = groundY - 22; y < groundY - 2; y += 4) ctx.fillRect(fx + 12, y, 30, 2);
-      const scanY = groundY - 24 + ((t * 14) % 24);
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.fillStyle = 'rgba(56,189,248,0.6)';
-      ctx.fillRect(fx + 12, scanY, 30, 2);
-      if (Math.sin(t * 19) > 0.4) {
-        ctx.fillStyle = 'rgba(186,230,253,0.45)';
-        ctx.fillRect(fx + 22, groundY - 12, 10, 8);
-      }
-      ctx.globalCompositeOperation = 'source-over';
-
-      // Twin interlocking rotating cogwheels
-      for (const [gx, gy, sz, dir] of [[fx + 56, groundY - 16, 12, 1], [fx + 67, groundY - 22, 8, -1]] as const) {
-        ctx.fillStyle = '#08060e';
-        ctx.fillRect(gx - sz / 2 - 1, gy - sz / 2 - 1, sz + 2, sz + 2);
-        ctx.fillStyle = '#64748b';
-        ctx.fillRect(gx - sz / 2, gy - sz / 2, sz, sz);
-        ctx.fillStyle = '#cbd5e1';
-        const gspin = ((Math.floor(t * 3 * dir) % 4) + 4) % 4;
-        ctx.fillRect(gx - 1 + (gspin % 2 ? 2 : -2), gy - 1, 2, 2);
-        ctx.fillRect(gx - 1, gy - 1 + (gspin < 2 ? -2 : 2), 2, 2);
-      }
-
-      // External spare drill rack on right
-      ctx.fillStyle = '#08060e';
-      ctx.fillRect(fx + 82, groundY - 14, 38, 14);
-      ctx.fillStyle = '#1e293b';
-      ctx.fillRect(fx + 84, groundY - 12, 34, 12);
-      for (let b = 0; b < 3; b++) {
-        ctx.fillStyle = b === 0 ? '#94a3b8' : b === 1 ? '#38bdf8' : '#f59e0b';
-        ctx.fillRect(fx + 87 + b * 11, groundY - 10, 6, 8);
-      }
-
-      // Signboard
-      const flick = Math.sin(t * 11 + 2) > -0.9 ? 1 : 0.45;
-      ctx.fillStyle = '#08060e';
-      ctx.fillRect(fx + 62, topY + 8, 66, 18);
-      ctx.fillStyle = '#141c28';
-      ctx.fillRect(fx + 64, topY + 10, 62, 14);
-      ctx.fillStyle = '#38bdf8';
-      ctx.fillRect(fx + 64, topY + 10, 62, 1);
-      ctx.globalAlpha = flick;
-      ctx.fillStyle = '#7dd3fc';
-      ctx.font = 'bold 8px "Press Start 2P", monospace';
-      ctx.fillText('▲ FORGE', fx + 69, topY + 21);
-      ctx.globalAlpha = 1;
-    }
-
-    /* ---------- SERVICE BAY (Upgraded Nano-Repair & Energy Station) ---------- */
-    {
-      const bx = OUTPOST_ZONES.REPAIR.startX * TILE_SIZE + 2;
-      const bw = 5 * TILE_SIZE + 4;
-      const bh = 38;
-      const topY = groundY - bh;
-
-      // Twin roof energy capacitor coils
-      for (const cxOff of [10, 24]) {
-        ctx.fillStyle = '#08060e';
-        ctx.fillRect(bx + cxOff, topY - 10, 8, 10);
-        ctx.fillStyle = '#334155';
-        ctx.fillRect(bx + cxOff + 1, topY - 9, 6, 8);
-        ctx.fillStyle = '#4ade80';
-        ctx.fillRect(bx + cxOff + 1, topY - 6, 6, 2);
-      }
-
-      ctx.fillStyle = '#08060e';
-      ctx.fillRect(bx, topY, bw, bh);
-      ctx.fillStyle = '#1d3329';
-      ctx.fillRect(bx + 2, topY + 2, bw - 4, bh - 2);
-      ctx.fillStyle = '#2c4c3e';
-      ctx.fillRect(bx + 2, topY + 2, bw - 4, 4);
-      ctx.fillStyle = '#08060e';
-      ctx.fillRect(bx - 3, topY - 3, bw + 6, 5);
-      ctx.fillStyle = '#22c55e';
-      ctx.fillRect(bx - 2, topY - 2, bw + 4, 3);
-
-      // Recharge dock bay on left + pulsing medical/repair cross on right
-      ctx.fillStyle = '#08060e';
-      ctx.fillRect(bx + 8, groundY - 20, 22, 20);
-      ctx.fillStyle = '#0f2419';
-      ctx.fillRect(bx + 10, groundY - 18, 18, 18);
-      ctx.fillStyle = '#4ade80';
-      ctx.fillRect(bx + 12, groundY - 14, 14, 2);
-
-      const pulse = 0.65 + 0.35 * Math.sin(t * 3.4);
-      ctx.globalCompositeOperation = 'lighter';
-      ctx.fillStyle = `rgba(74,222,128,${pulse})`;
-      ctx.fillRect(bx + 44, topY + 12, 16, 5);
-      ctx.fillRect(bx + 49, topY + 7, 5, 15);
-      ctx.globalCompositeOperation = 'source-over';
-      ctx.fillStyle = '#052e16';
-      ctx.fillRect(bx + 46, topY + 14, 12, 1);
-      ctx.fillRect(bx + 51, topY + 9, 1, 11);
-    }
-
+    // Two utility poles, each feeding the buildings beside it with a service drop.
+    const pole = (x: number) => {
+      px(ctx, x - 1, ground - 74, 4, 74, '#0b0f16');
+      px(ctx, x, ground - 74, 2, 74, '#5a4a38');
+      px(ctx, x, ground - 74, 1, 74, '#7d6a52');
+      px(ctx, x - 8, ground - 70, 18, 3, '#0b0f16');
+      px(ctx, x - 7, ground - 69, 16, 1, '#6d5a44');
+      for (const ix of [x - 7, x + 7]) px(ctx, ix, ground - 73, 2, 3, '#9fb3ad');
+    };
+    const halfW = this.viewW / (2 * this.zoom) + 40;
+    const left = this.camX - halfW;
+    const right = this.camX + halfW;
+    const visible = (x: number, kind: BuildingKind) => {
+      const b = BUILDING_BOUNDS[kind];
+      return x + b.right >= left && x + b.left <= right;
+    };
+    const refX = OUTPOST_ZONES.REFINERY.startX * TILE_SIZE + 4;
+    const forgeX = OUTPOST_ZONES.FORGE.startX * TILE_SIZE + 1;
+    const repairX = OUTPOST_ZONES.REPAIR.startX * TILE_SIZE + 5;
+    const shaftX = OUTPOST_ZONES.SHAFT.startX * TILE_SIZE;
+    if (372 >= left && 372 <= right) pole(372);
+    if (800 >= left && 800 <= right) pole(800);
+    const refAnnexTop: [number, number] = [refX + 141, ground - 86];
+    if (refX + 164 >= left && 372 <= right) cable(ctx, [365, ground - 72], refAnnexTop, 8, '#151b20');
+    const forgeLean: [number, number] = [forgeX + 146, ground - 50];
+    const serviceTop: [number, number] = [repairX + 2, ground - 62];
+    if (forgeX + 152 >= left && 800 <= right) cable(ctx, forgeLean, [793, ground - 72], 6, '#151b20');
+    if (800 >= left && repairX <= right) cable(ctx, [807, ground - 72], serviceTop, 4, '#151b20');
+    if (visible(refX, 'refinery')) drawBuilding(ctx, 'refinery', refX, ground, t,
+      { id: 'game-refinery', tier, active: nearby === 'refinery' });
+    if (visible(forgeX, 'forge')) drawBuilding(ctx, 'forge', forgeX, ground, t,
+      { id: 'game-forge', tier, active: nearby === 'forge' });
+    if (visible(repairX, 'repair')) drawBuilding(ctx, 'repair', repairX, ground, t,
+      { id: 'game-repair', tier, active: nearby === 'repair' });
+    if (visible(shaftX, 'shaft')) drawBuilding(ctx, 'shaft', shaftX, ground, t, { id: 'game-shaft' });
     this.renderNpcs(ctx);
   }
 

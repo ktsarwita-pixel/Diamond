@@ -10,13 +10,14 @@ import {
   glowAt,
   hash,
   headframeSprite,
-  rgba,
   ridgeSprite,
   shade,
   shedSprite,
   skyCanvas,
 } from './cutsceneArt';
 import { sprites } from './sprites';
+import { vignetteSprite } from './cineKit';
+import { qn } from './quality';
 import { TileType } from './types';
 
 export const SET_W = 720;
@@ -638,6 +639,7 @@ export function cloudLayer(ctx: CanvasRenderingContext2D, t: number, y: number, 
 }
 
 export function motes(ctx: CanvasRenderingContext2D, t: number, count: number, color: string, top = 20, bottom = 330) {
+  count = qn(count, 0.5);
   ctx.fillStyle = color;
   for (let i = 0; i < count; i++) {
     const speed = 7 + hash(i + 19) * 14;
@@ -650,11 +652,7 @@ export function motes(ctx: CanvasRenderingContext2D, t: number, count: number, c
 }
 
 export function filmLighting(ctx: CanvasRenderingContext2D, color: string, strength: number) {
-  const vignette = ctx.createRadialGradient(320, 170, 55, 320, 170, 440);
-  vignette.addColorStop(0, 'rgba(3,2,8,0)');
-  vignette.addColorStop(1, rgba(color, strength));
-  ctx.fillStyle = vignette;
-  ctx.fillRect(0, 0, 640, CH);
+  ctx.drawImage(vignetteSprite(color, Math.round(strength * 50) / 50, 320, 170, 55, 440), 0, 0, 640, CH);
 }
 
 let cachedShaftWall: HTMLCanvasElement | null = null;

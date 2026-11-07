@@ -17,9 +17,15 @@ export function R(ctx: CanvasRenderingContext2D, x: number, y: number, w: number
   ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
 }
 
+const rgbCache = new Map<string, RGB>();
 export function hexToRgb(hex: string): RGB {
+  const cached = rgbCache.get(hex);
+  if (cached) return cached;
   const h = hex.replace('#', '');
-  return [parseInt(h.substring(0, 2), 16), parseInt(h.substring(2, 4), 16), parseInt(h.substring(4, 6), 16)];
+  const rgb: RGB = [parseInt(h.substring(0, 2), 16), parseInt(h.substring(2, 4), 16), parseInt(h.substring(4, 6), 16)];
+  if (rgbCache.size > 512) rgbCache.clear();
+  rgbCache.set(hex, rgb);
+  return rgb;
 }
 export function rgbToHex([r, g, b]: RGB): string {
   const c = (v: number) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0');
@@ -30,8 +36,16 @@ export function mix(a: string, b: string, t: number): string {
   const B = hexToRgb(b);
   return rgbToHex([A[0] + (B[0] - A[0]) * t, A[1] + (B[1] - A[1]) * t, A[2] + (B[2] - A[2]) * t]);
 }
+const shadeCache = new Map<string, string>();
 export function shade(hex: string, amount: number): string {
-  return amount >= 0 ? mix(hex, '#ffffff', amount) : mix(hex, '#000000', -amount);
+  const value = Math.round(amount * 100) / 100;
+  const key = `${hex}:${value}`;
+  const cached = shadeCache.get(key);
+  if (cached) return cached;
+  const out = value >= 0 ? mix(hex, '#ffffff', value) : mix(hex, '#000000', -value);
+  if (shadeCache.size > 2048) shadeCache.clear();
+  shadeCache.set(key, out);
+  return out;
 }
 export function rgba(hex: string, a: number): string {
   const [r, g, b] = hexToRgb(hex);
@@ -107,7 +121,7 @@ function cached(key: string, w: number, h: number, paint: (ctx: CanvasRenderingC
   const ctx = c.getContext('2d')!;
   ctx.imageSmoothingEnabled = false;
   paint(ctx);
-  if (cache.size > 80) cache.clear();
+  if (cache.size > 400) cache.clear();
   cache.set(key, c);
   return c;
 }
@@ -503,16 +517,30 @@ export function lightShaft(ctx: CanvasRenderingContext2D, x: number, y: number, 
   ctx.fill();
   ctx.restore();
 }
+const glowSprites = new Map<string, HTMLCanvasElement>();
+/** Additive radial glow — rendered once per colour, then blitted (no per-call gradients). */
 export function glowAt(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, color: string, a: number) {
-  ctx.save();
+  if (a <= 0.004 || r < 1) return;
+  let spr = glowSprites.get(color);
+  if (!spr) {
+    spr = document.createElement('canvas');
+    spr.width = spr.height = 64;
+    const g = spr.getContext('2d')!;
+    const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    grad.addColorStop(0, rgba(color, 1));
+    grad.addColorStop(0.5, rgba(color, 0.35));
+    grad.addColorStop(1, rgba(color, 0));
+    g.fillStyle = grad;
+    g.fillRect(0, 0, 64, 64);
+    glowSprites.set(color, spr);
+  }
+  const prevOp = ctx.globalCompositeOperation;
+  const prevA = ctx.globalAlpha;
   ctx.globalCompositeOperation = 'lighter';
-  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
-  g.addColorStop(0, rgba(color, a));
-  g.addColorStop(0.5, rgba(color, a * 0.35));
-  g.addColorStop(1, rgba(color, 0));
-  ctx.fillStyle = g;
-  ctx.fillRect(x - r, y - r, r * 2, r * 2);
-  ctx.restore();
+  ctx.globalAlpha = prevA * Math.min(1, a);
+  ctx.drawImage(spr, x - r, y - r, r * 2, r * 2);
+  ctx.globalAlpha = prevA;
+  ctx.globalCompositeOperation = prevOp;
 }
 export function sparksAt(ctx: CanvasRenderingContext2D, x: number, y: number, t: number, seed: number, count = 14, spread = 30) {
   ctx.save();
@@ -590,6 +618,8 @@ export interface HeroRobotOpts {
   brokenWheel?: boolean;
   /** 0..1 extension of the small front service manipulator arm (Scene 10 handshake). */
   serviceArm?: number;
+  /** Disable free idle bob when a shot supplies exact physical contact poses. */
+  chassisMotion?: boolean;
 }
 
 const AETHER_BODY = {
@@ -656,14 +686,16 @@ export function heroRobot(ctx: CanvasRenderingContext2D, o: HeroRobotOpts) {
   const power = o.power ?? 1;
   const blink = state !== 'sleep' && t % 3.4 < 0.1;
 
-  const bob =
-    state === 'idle' ? Math.sin(t * 2.1) * 0.6 :
-    state === 'happy' ? -Math.abs(Math.sin(t * 5)) * 3 :
-    state === 'crash' ? 0 : Math.sin(t * 1.4) * 0.35;
+  const idleSway = o.chassisMotion === false ? 0 : state === 'idle' ? Math.sin(t * 0.74) * 0.018 : 0;
+  const bob = o.chassisMotion === false ? 0 :
+    state === 'idle' ? Math.sin(t * 1.55) * 0.23 + Math.sin(t * 0.69) * 0.1 :
+    state === 'happy' ? Math.sin(t * 3) * 0.18 :
+    state === 'crash' ? 0 : Math.sin(t * 1.4) * 0.1;
 
   ctx.save();
   ctx.translate(o.x, o.y + bob);
   if (o.rot) ctx.rotate(o.rot);
+  else if (idleSway) ctx.rotate(idleSway);
   ctx.scale((o.flip ? -1 : 1) * s, s);
 
   const P = (x: number, y: number, w: number, h: number, c: string) => R(ctx, x, y, w, h, c);
@@ -681,9 +713,11 @@ export function heroRobot(ctx: CanvasRenderingContext2D, o: HeroRobotOpts) {
   }
 
   /* --- shadow --- */
-  ctx.globalAlpha = 0.28;
-  P(-10, 14, 20, 3, '#000000');
-  ctx.globalAlpha = 1;
+  if (state !== 'falling') {
+    ctx.globalAlpha = 0.28;
+    P(-10, 14, 20, 3, '#000000');
+    ctx.globalAlpha = 1;
+  }
 
   /* --- jetpack housing --- */
   P(-12, -3, 4, 10, INK);
@@ -706,7 +740,7 @@ export function heroRobot(ctx: CanvasRenderingContext2D, o: HeroRobotOpts) {
   };
 
   /* --- treads & tank bogies --- */
-  const rawWheel = o.wheelPhase ?? t * 6;
+  const rawWheel = o.wheelPhase ?? (state === 'working' ? t * 0.3 : 0);
   const phase = ((rawWheel % 1) + 1) % 1;
   P(-11, 7, 22, 8, INK);
   P(-10, 8, 20, 6, '#1b1f27');
@@ -765,6 +799,29 @@ export function heroRobot(ctx: CanvasRenderingContext2D, o: HeroRobotOpts) {
   P(1, -4, 2, 1, BODY.hi);
   P(4, -4, 1, 1, BODY.sideDeep);
 
+  // Half-unit engraving adds mechanical detail without changing CUBE-07's silhouette.
+  const D = (x: number, y: number, w: number, h: number, color: string) => {
+    ctx.fillStyle = color;
+    ctx.fillRect(x, y, w, h);
+  };
+  D(-7.5, -6.5, 7, 0.5, BODY.hi);
+  D(-0.5, -6.5, 0.5, 3.5, BODY.deep);
+  D(0.5, -6.5, 5.5, 0.5, BODY.hi);
+  D(5.5, -6, 0.5, 3, BODY.sideDeep);
+  D(-7.5, 2.5, 0.5, 1.5, BODY.light);
+  D(1, 1, 5, 0.5, BODY.deep);
+  for (let i = 0; i < 4; i++) {
+    D(1 + i * 1.2, 1.5, 0.5, 1.5, BODY.sideDeep);
+    D(-9.5, -4.5 + i * 1.2, 0.5, 0.5, '#c2c7bb');
+  }
+  D(-4.5, -5.5, 2, 0.5, shade(BODY.mid, -0.2));
+  D(2.5, -4.5, 1.5, 0.5, shade(BODY.mid, -0.2));
+  if (pm > 0.6) {
+    D(-4, -6.5, 1.5, 0.5, '#d3c2a0');
+    D(2, -3.5, 1, 0.5, '#573a29');
+    D(6, 1.5, 0.5, 2, '#d0b88d');
+  }
+
   // Atmospheric re-entry scorching / blistering patches when paintMix is transitioning (0 < pm < 1)
   if (pm > 0.05 && pm < 0.95) {
     for (let py = -7; py < 5; py++) {
@@ -798,6 +855,15 @@ export function heroRobot(ctx: CanvasRenderingContext2D, o: HeroRobotOpts) {
   P(-5, 1, 4, 2, lit('#f2b718'));
   P(-5, 1, 4, 1, '#fff0a8');
   P(-7, 0, 1, 3, '#f4c278');
+  // An idle power heartbeat is slow and legible, not a noisy full-body flicker.
+  if (state === 'idle') {
+    const beat = Math.pow(Math.max(0, Math.sin(t * 1.35 - 0.35)), 7);
+    P(-4, 1, 2, 1, mix('#c77423', '#fff0a8', beat));
+    P(4, 0, 1, 2, beat > 0.52 ? '#8cf3ee' : '#32747c');
+    if (power > 0.35 && t % 9 < 0.16 && Math.sin(t * 5) > 0.8) {
+      smokeAt(ctx, -12, 1, t, 37, '#8a9290', 2, 9);
+    }
+  }
 
   /* --- back vents / exhaust --- */
   P(-13, 2, 2, 4, INK);
@@ -860,8 +926,8 @@ export function heroRobot(ctx: CanvasRenderingContext2D, o: HeroRobotOpts) {
 
   // Antenna — a two-segment whip rigidly mounted on the helmet. It bends at the
   // base, so the tip can never drift away from the stem and look like it floats.
-  const idleSway = state === 'idle' || state === 'sleep' || state === 'sad';
-  const swayAmt = Math.sin(t * (idleSway ? 1.7 : 5)) * 1.2 + dmg * 1.5;
+  const antennaIdle = state === 'idle' || state === 'sleep' || state === 'sad';
+  const swayAmt = Math.sin(t * (antennaIdle ? 1.7 : 5)) * 1.2 + dmg * 1.5;
   const antBaseX = 1;
   const antBaseY = -14; // helmet crown sits at -13, so the boss overlaps it
   const stemTopY = -18;

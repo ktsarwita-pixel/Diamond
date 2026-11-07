@@ -400,6 +400,24 @@ export interface CubeDrawParams {
   lowHull?: boolean;
   lowFuel?: boolean;
   cargoFull?: boolean;
+  /** World-space collision floor. Visual squash/rotation may not cross it. */
+  groundY?: number;
+}
+
+/** Computes the lowest transformed tread corner before choosing render height. */
+export function cubeGroundPose(p: CubeDrawParams, sx: number, sy: number, angle: number, desiredY: number) {
+  const scale = p.scale ?? 1;
+  const floor = p.groundY;
+  const sin = Math.sin(angle), cos = Math.cos(angle);
+  // The track housing occupies x=-8..8, y=3..9 in the sprite.
+  const treadMax = Math.max(
+    -8 * sx * sin + 3 * sy * cos, 8 * sx * sin + 3 * sy * cos,
+    -8 * sx * sin + 9 * sy * cos, 8 * sx * sin + 9 * sy * cos,
+  ) * scale;
+  // A supplied floor means supported, not merely collision-limited. The old
+  // min() allowed wake jolts and breathing to lift the entire track off it.
+  const y = floor === undefined ? desiredY : floor - treadMax;
+  return { y, treadBottom: y + treadMax, floor, sx, sy, angle, scale };
 }
 
 export function drawCubeMiner(ctx: CanvasRenderingContext2D, p: CubeDrawParams) {
@@ -412,21 +430,84 @@ export function drawCubeMiner(ctx: CanvasRenderingContext2D, p: CubeDrawParams) 
 
   const idle = p.idleTime ?? 0;
   const idling = idle > 1.2 && !p.isDrilling && p.thrustPower < 0.1;
-  const sleeping = idle > 9;
+  const sleeping = idle > 9 && !p.lowHull;
   const dmg = p.damaged ?? 0;
   const power = p.power ?? 1;
   const powered = power > 0.05 && (power >= 1 || Math.sin(p.time * 31) > 1 - power * 2);
 
-  // Breathing — the chassis gently expands while idle, slower when asleep
-  const breathe = idling ? Math.sin(p.time * (sleeping ? 1.25 : 2.4)) * (sleeping ? 0.05 : 0.028) : 0;
+  // Breathing — the chassis gently expands while idle, slower when asleep.
+  const hurt = !!p.lowHull && !p.godMode;
+  const breathe = idling && !hurt ? Math.sin(p.time * (sleeping ? 1.25 : 2.4)) * (sleeping ? 0.05 : 0.028) : 0;
 
+  // ---- Low-hull idle: a repeating sleep / wake / DANGER cycle ----
+  // Every ~8.4 s the damaged rig gives out, sleeps, then jolts awake with a
+  // warning icon over it, and the cycle repeats. This is deliberately unlike
+  // the healthy idle (which only breathes) so the state reads at a glance.
+  //   0.0-3.4 s  struggling awake (limp, list, coughing, brown-out eyes)
+  //   3.4-7.0 s  powered down: eyes shut, deep sag, antenna droops
+  //   7.0-8.4 s  jolts awake: red alarm eyes, DANGER icon above, sparks
+  const HURT_CYCLE = 8.4;
+  // Active whenever hull is low and the rig is not drilling/flying, so the player
+  // sees it the moment they stop rather than after the idle grace period.
+  const stressed = hurt && !p.isDrilling && p.thrustPower < 0.1;
+  const hurtPhase = stressed ? (idle % HURT_CYCLE) : 0;
+  const hurtAsleep = stressed && hurtPhase > 3.4 && hurtPhase < 7.0;
+  const hurtWaking = stressed && hurtPhase >= 7.0;
+  const wakeT = hurtWaking ? (hurtPhase - 7.0) / (HURT_CYCLE - 7.0) : 0;
+  const hurtCycle = stressed && !hurtAsleep ? (p.time % 2.6) : 0;
+  const hurtHeave = stressed && !hurtAsleep
+    ? (hurtCycle < 0.35 ? Math.sin((hurtCycle / 0.35) * Math.PI) : hurtCycle < 0.75 ? Math.sin(((hurtCycle - 0.4) / 0.35) * Math.PI) * 0.7 : 0)
+    : 0;
+  const hurtSquash = stressed ? hurtHeave * 0.08 - (hurtAsleep ? 0.075 : 0.035) : 0;
+  const stutter = stressed && !hurtAsleep && Math.sin(p.time * 17) > 0.92 && Math.sin(p.time * 2.3) > 0.3 ? 1 : 0;
+  const sag = stressed ? (hurtAsleep ? 4 : 2) : 0;
+  // The jolt: a sharp 3-pixel lift right at the moment it wakes, then settles.
+  const jolt = hurtWaking ? Math.round(Math.sin(Math.min(1, wakeT * 4) * Math.PI) * 3) : 0;
+
+  const parentTransform = ctx.getTransform();
   ctx.save();
   // Micro-vibration while the drill bites into rock
   const vib = p.isDrilling ? Math.round(Math.sin(p.time * 62) * 1.2) : 0;
-  ctx.translate(p.x + vib * 0.6, p.y + p.bob * 0.6 + (sleeping ? 1 : 0) + vib * 0.4);
-  if (p.rotation) ctx.rotate(p.rotation);
+  const list = stressed ? -0.07 - hurtHeave * 0.02 - (hurtAsleep ? 0.05 : 0) : 0;
+  const angle = (p.rotation ?? 0) + list;
+  const sx = p.squashX * (1 - breathe * 0.6 - hurtSquash * 0.7);
+  const sy = p.squashY * (1 + breathe + hurtSquash);
+  const desiredY = p.y + p.bob * 0.6 + (sleeping ? 1 : 0) + vib * 0.4 + sag + Math.round(hurtHeave * 1.5) - jolt;
+  const contact = cubeGroundPose(p, sx, sy, angle, desiredY);
+  // Keep the lowest tread corner above the real collision floor in every
+  // breathing, shutdown, wake-jolt and landing-squash pose.
+  ctx.translate(p.x + vib * 0.6 + stutter, contact.y);
+  if (angle) ctx.rotate(angle);
   if (p.scale) ctx.scale(p.scale, p.scale);
-  ctx.scale(p.squashX * (1 - breathe * 0.6), p.squashY * (1 + breathe));
+  ctx.scale(sx, sy);
+  const hullTransform = ctx.getTransform();
+  // On low hull, suspension motion belongs to the body. Both tread soles stay
+  // level on the ground while the shell leans, compresses and wakes above them.
+  const plantedTracks = stressed && p.groundY !== undefined;
+  const trackScale = p.scale ?? 1;
+  const stableTrackMatrix = plantedTracks
+    ? parentTransform.translate(p.x, p.groundY! - 9 * trackScale).scale(trackScale, trackScale)
+    : null;
+
+  /* ---- Low-hull sputter: weak coughs of exhaust from the back vent while idle ---- */
+  if (stressed && !hurtAsleep && !tint) {
+    const k = hurtCycle < 0.5 ? hurtCycle / 0.5 : -1; // one puff per breath cycle
+    if (k >= 0) {
+      const puffY = 7 + k * 6;
+      const puffS = 1 + Math.round(k * 3);
+      ctx.globalAlpha = (1 - k) * 0.55;
+      ctx.fillStyle = '#9aa3a8';
+      ctx.fillRect(-8 - Math.round(k * 2), puffY, puffS, puffS);
+      ctx.fillStyle = '#c7ced2';
+      ctx.fillRect(-8 - Math.round(k * 2), puffY, 1, 1);
+      ctx.globalAlpha = 1;
+      // a single ember when the cough starts
+      if (k < 0.15) {
+        ctx.fillStyle = '#fb923c';
+        ctx.fillRect(-7, 8, 1, 1);
+      }
+    }
+  }
 
   /* ---- Jetpack flames (Distinct visuals per Thruster Tier!) ---- */
   if (p.thrustPower > 0.02) {
@@ -487,6 +568,7 @@ export function drawCubeMiner(ctx: CanvasRenderingContext2D, p: CubeDrawParams) 
   }
 
   /* ---- Treads & 3-Bogie Suspension ---- */
+  if (stableTrackMatrix) ctx.setTransform(stableTrackMatrix);
   // Hydraulic suspension struts connecting hull to tread frame
   ctx.fillStyle = T('#475569');
   ctx.fillRect(-5, 2, 2, 2);
@@ -526,6 +608,7 @@ export function drawCubeMiner(ctx: CanvasRenderingContext2D, p: CubeDrawParams) 
     ctx.fillStyle = '#08060e';
     ctx.fillRect(1, 4, 3, 2);
   }
+  if (stableTrackMatrix) ctx.setTransform(hullTransform);
 
   /* ---- Cached armor chassis; animated loose wire remains live ---- */
   ctx.drawImage(chassisSprite(p.armorTier, Boolean(p.pristine), tint), -9, -10);
@@ -651,11 +734,32 @@ export function drawCubeMiner(ctx: CanvasRenderingContext2D, p: CubeDrawParams) 
       ctx.fillRect(2, -4, 2, 1);
       ctx.fillRect(5, -4, 2, 1);
       ctx.globalAlpha = 1;
-    } else if (p.lowHull && Math.floor(p.time * 8) % 2 === 0) {
-      // Alarmed flashing exclamation warning
+    } else if (stressed && hurtAsleep) {
+      // Powered down: eyes shut and dark.
+      ctx.fillStyle = '#1b2a33';
+      ctx.fillRect(2 + eyeDx, -4, 2, 1);
+      ctx.fillRect(5 + eyeDx, -4, 1, 1);
+    } else if (stressed && hurtWaking) {
+      // Jolted awake: hard red alarm eyes for the whole wake window.
+      ctx.fillStyle = '#ff3b30';
+      ctx.fillRect(2 + eyeDx, -6, 2, 3);
+      ctx.fillRect(5 + eyeDx, -6, 2, 3);
+      ctx.fillStyle = '#ffd0cc';
+      ctx.fillRect(2 + eyeDx, -6, 1, 1);
+      ctx.fillRect(5 + eyeDx, -6, 1, 1);
+    } else if (stressed && hurtCycle > 1.7 && hurtCycle < 2.1) {
+      // Alarmed exclamation, shown once per laboured-breath cycle
       ctx.fillStyle = '#ef4444';
       ctx.fillRect(3, -6, 2, 2);
       ctx.fillRect(3, -3, 2, 1);
+    } else if (stressed) {
+      // Brown-out eyes: half-lidded, dim, flickering with the power stutter
+      const flick = stutter ? 0.25 : 0.55 + 0.2 * Math.sin(p.time * 9);
+      ctx.globalAlpha = flick;
+      ctx.fillStyle = '#4fb0e0';
+      ctx.fillRect(2 + eyeDx, -4, 2, 1);
+      ctx.fillRect(5 + eyeDx, -4, 1, 1);
+      ctx.globalAlpha = 1;
     } else if (p.emote === 'happy') {
       // ^ ^
       ctx.fillRect(2, -4, 1, 1);
@@ -697,6 +801,44 @@ export function drawCubeMiner(ctx: CanvasRenderingContext2D, p: CubeDrawParams) 
     }
   }
 
+  // ---- DANGER icon while the rig jolts awake from a low-hull shutdown ----
+  if (stressed && hurtWaking && !tint) {
+    const pulse = 0.7 + 0.3 * Math.sin(p.time * 14);
+    const iy = -25;
+    ctx.globalAlpha = Math.min(1, wakeT * 3) * (1 - Math.max(0, wakeT - 0.8) * 5);
+    // warning triangle
+    ctx.fillStyle = '#08060e';
+    ctx.beginPath();
+    ctx.moveTo(-7, iy + 7); ctx.lineTo(0, iy - 5); ctx.lineTo(7, iy + 7); ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#facc15';
+    ctx.beginPath();
+    ctx.moveTo(-5.5, iy + 6); ctx.lineTo(0, iy - 3); ctx.lineTo(5.5, iy + 6); ctx.closePath();
+    ctx.fill();
+    // exclamation mark
+    ctx.fillStyle = '#08060e';
+    ctx.fillRect(-1, iy, 2, 4);
+    ctx.fillRect(-1, iy + 5, 2, 1);
+    ctx.globalAlpha = 1;
+    // Halo follows the triangle instead of covering it with a square light box.
+    if (pulse > 0.85) {
+      ctx.globalAlpha = 0.22;
+      ctx.strokeStyle = '#facc15'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(-9, iy + 8); ctx.lineTo(0, iy - 7); ctx.lineTo(9, iy + 8); ctx.closePath();
+      ctx.stroke(); ctx.globalAlpha = 1;
+    }
+  }
+
+  // Low hull: short-circuit sparks from the damaged side panel on each shudder
+  if (stressed && !tint && hurtHeave > 0.85) {
+    const n = 3;
+    for (let i = 0; i < n; i++) {
+      const a = -0.6 - i * 0.5 + Math.sin(p.time * 40 + i) * 0.3;
+      const r = 2 + ((p.time * 50 + i * 3) % 4);
+      ctx.fillStyle = i % 2 ? '#fde047' : '#ffffff';
+      ctx.fillRect(Math.round(-7 + Math.cos(a) * r), Math.round(0 + Math.sin(a) * r), 1, 1);
+    }
+  }
   // Cracked visor
   if (dmg > 0.3 && !tint) {
     ctx.fillStyle = 'rgba(255,255,255,0.7)';
@@ -708,11 +850,21 @@ export function drawCubeMiner(ctx: CanvasRenderingContext2D, p: CubeDrawParams) 
   /* ---- Articulated drill arm ---- */
   if (!p.hideDrill) {
     ctx.save();
-    const cos = Math.cos(p.aimAngle);
-    const sin = Math.sin(p.aimAngle);
+    // Low hull: the drill arm hangs limp toward the ground, twitching with each shudder.
+    const droop = stressed ? 0.55 + hurtHeave * 0.08 : 0;
+    let aim = stressed ? p.aimAngle * (1 - droop) + (Math.PI / 2 - 0.35) * droop : p.aimAngle;
+    if (p.groundY !== undefined && !p.isDrilling && p.thrustPower < 0.1) {
+      // A resting auger can droop, but cannot stab through the floor. Retain
+      // upward aiming and the chosen left/right facing while limiting down-tilt.
+      const local = Math.atan2(Math.sin(aim), Math.abs(Math.cos(aim)));
+      const safe = Math.min(local, stressed ? 0.18 + hurtHeave * 0.025 : 0.2);
+      aim = Math.cos(aim) < 0 ? Math.PI - safe : safe;
+    }
+    const cos = Math.cos(aim);
+    const sin = Math.sin(aim);
     const mount = 6 + p.drillExtend * 2.5;
     ctx.translate(Math.round(cos * mount), Math.round(sin * mount));
-    ctx.rotate(p.aimAngle);
+    ctx.rotate(aim);
 
     ctx.fillStyle = T('#08060e');
     ctx.fillRect(-4, -4, 6, 8);

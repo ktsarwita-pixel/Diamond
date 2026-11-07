@@ -591,3 +591,29 @@ button,
 @media (prefers-reduced-motion: reduce) {
   .animate-npc-bubble { animation: none; }
 }
+
+.cinematic-quality {
+  min-width: 44px;
+  padding: 0 6px;
+}
+.cinematic-quality.is-lite {
+  color: #9fe0b0;
+  border-color: #4f7a5a;
+}
+
+/* Main menu: expedition terminal */
+.menu-shell {
+  background:
+    radial-gradient(ellipse at 20% 0%, rgba(31, 58, 68, 0.55), transparent 55%),
+    radial-gradient(ellipse at 90% 100%, rgba(122, 62, 36, 0.35), transparent 50%),
+    #0b1116;
+}
+.menu-frame {
+  border: 3px solid #0b0f16;
+  background: #121a21;
+  box-shadow: inset 3px 3px 0 #2c3943, inset -3px -3px 0 #0b0f16, 0 10px 0 rgba(0,0,0,0.6), 0 30px 80px rgba(0,0,0,0.6);
+}
+.menu-shell::-webkit-scrollbar { width: 10px; }
+.menu-shell::-webkit-scrollbar-track { background: #0b1116; }
+.menu-shell::-webkit-scrollbar-thumb { background: #3a4a54; border: 2px solid #0b1116; }
+.menu-shell::-webkit-scrollbar-thumb:hover { background: #f2c46a; }

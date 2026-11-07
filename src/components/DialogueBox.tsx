@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { CHARACTERS, SpeakerId, drawCubeMiner } from '../game/characters';
-import { heroHuman } from '../game/cutsceneArt';
+import { cinematicHuman } from '../game/cineHumans';
 import { DialogueLine } from '../game/types';
 
 /** Live animated pixel portrait for any speaker. */
@@ -16,8 +16,8 @@ export const Portrait: React.FC<{ speaker: SpeakerId; talking?: boolean; size?: 
   useEffect(() => {
     const c = ref.current;
     if (!c) return;
-    c.width = 40;
-    c.height = 40;
+    c.width = 80;
+    c.height = 80;
     const ctx = c.getContext('2d')!;
     ctx.imageSmoothingEnabled = false;
     const info = CHARACTERS[speaker];
@@ -30,6 +30,7 @@ export const Portrait: React.FC<{ speaker: SpeakerId; talking?: boolean; size?: 
       if (now - lastPaint < 1000 / 30) return;
       lastPaint = now;
       const t = (now - start) / 1000;
+      ctx.setTransform(2, 0, 0, 2, 0, 0);
       ctx.fillStyle = '#2b2635';
       ctx.fillRect(0, 0, 40, 40);
       ctx.fillStyle = '#1a1726';
@@ -61,11 +62,27 @@ export const Portrait: React.FC<{ speaker: SpeakerId; talking?: boolean; size?: 
           eyeOverride: talkingRef.current ? { dx: 0, dy: Math.sin(t * 12) > 0 ? 0 : -1 } : null,
         });
       } else if (info.look) {
-        heroHuman(ctx, {
-          x: 19, y: 45, s: info.look.small ? 1.2 : 1.34,
-          t, look: info.look, pose: 'idle', facing: 1, talking: talkingRef.current,
-          flipProp: talkingRef.current && speaker === 'gus' ? 'wrench' : null,
+        // Close-up bust using the high-detail cinematic human (canvas is 40px; draw at 2x via transform)
+        ctx.save();
+        ctx.scale(0.625, 0.625);
+        const g = ctx.createRadialGradient(28, 22, 4, 32, 32, 46);
+        g.addColorStop(0, info.accent + '55');
+        g.addColorStop(1, 'rgba(10,8,14,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, 64, 64);
+        cinematicHuman(ctx, {
+          x: 30,
+          y: info.look.small ? 108 : 132,
+          s: 4,
+          t,
+          look: info.look,
+          pose: 'idle',
+          facing: 1,
+          talking: talkingRef.current,
+          rim: info.accent,
+          lampOn: true,
         });
+        ctx.restore();
       }
     };
     raf = requestAnimationFrame(draw);
