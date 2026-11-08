@@ -505,7 +505,7 @@ export const CUTSCENE: CutsceneScene[] = [
     set: 'outpost',
     duration: PROMISE_DURATION,
     speaker: 'mara',
-    text: '"Take our last power cell. Mine for us, and we will keep you running." CUBE-07 accepted. For the first time, he had a home.',
+    text: '"Take our last power cell. Mine for us, and we will keep you running." CUBE took it gently. For the first time, he had a home.',
     sfx: 'boot',
     draw(ctx, t) {
       drawPromiseScene(ctx, t);

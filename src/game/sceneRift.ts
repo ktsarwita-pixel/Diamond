@@ -1,5 +1,5 @@
 import { clamp, hash, heroRobot, mix, shade } from './cutsceneArt';
-import { Job, band, hex3, hudPanel, lerp, makeCanvas, makeNoise, paintPixelsGen, sliceTimer } from './cineKit';
+import { Job, band, hex3, lerp, makeCanvas, makeNoise, paintPixelsGen, sliceTimer } from './cineKit';
 import { isLite, qn } from './quality';
 import { ellipse, pixelGlow, pixelLine, polygon, px, rockTextureGen, type Point } from './pixelCraft';
 
@@ -37,7 +37,16 @@ const HEART_CHANNEL: Point[] = [[1666, 526], [1620, 543], [1612, 580], [1600, 62
   [1548, 646], [1462, 652], [1388, 646], [1332, 634], [1261, 632], [1234, 630]];
 const HEART_SEAM: Point[] = [[1604, 250], [1560, 320], [1548, 372], [1572, 420],
   [1600, 470], [1612, 520], [1598, 566]];
-const PORTAL = { x: 40, y: 440, w: 360, h: 300, opening: { x: 138, y: 576, w: 94, h: 88 } } as const;
+const PORTAL = {
+  x: 40, y: 440, w: 360, h: 300,
+  // The adit opens SIDEWAYS into the cavern. The clear travel lane has no right
+  // jamb/return wall: CUBE rolls out of the recess, not laterally through timber.
+  opening: { x: 160, y: 580, w: 124, h: 82 },
+  travelLane: { x: 164, y: 600, w: 116, h: 58 },
+  leftJamb: { x: 148, y: 572, w: 12, h: 94 },
+  lintel: { x: 144, y: 564, w: 140, h: 14 },
+  footings: [{ x: 154, y: 666 }],
+} as const;
 const finish = (x: number) => { const t = clamp(x); return t * t * t * (10 + t * (-15 + t * 6)); };
 const n = makeNoise(124612);
 
@@ -85,6 +94,48 @@ const BENCHES: Point[][] = Array.from({ length: 8 }, (_, i) => {
   return [[x, y + 7], [x + 28, y], [x + 83, y + 3], [x + 101, y - 5],
     [x + 167, y - 1], [x + 190, y + 11], [x + 149, y + 25], [x + 71, y + 22], [x + 17, y + 29]];
 });
+function insidePolygon(points: readonly Point[], x: number, y: number) {
+  let inside = false;
+  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
+    const a = points[i], b = points[j];
+    if ((a[1] > y) !== (b[1] > y) && x < (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]) + a[0]) inside = !inside;
+  }
+  return inside;
+}
+function ctxAlpha(ctx: CanvasRenderingContext2D, alpha: number, draw: () => void) {
+  ctx.save(); ctx.globalAlpha = alpha; draw(); ctx.restore();
+}
+/** Sedimentary bedding + fractures clipped to the actual rock silhouette. */
+function* beddingGen(ctx: CanvasRenderingContext2D, points: readonly Point[], seed: number, dark: string, light: string): Generator<void, void, unknown> {
+  const slice = sliceTimer();
+  const minX = Math.min(...points.map(p => p[0])), maxX = Math.max(...points.map(p => p[0]));
+  const minY = Math.min(...points.map(p => p[1])), maxY = Math.max(...points.map(p => p[1]));
+  let row = 0;
+  for (let y = minY + 10; y < maxY - 4; y += 16, row++) {
+    let prev: Point | null = null;
+    for (let x = minX; x <= maxX; x += 6) {
+      const yy = y + Math.sin(x * 0.02 + seed) * 3 + n.noise(x * 0.01, seed + row) * 4;
+      if (insidePolygon(points, x, yy)) {
+        if (prev) pixelLine(ctx, prev, [x, yy], row % 3 === 0 ? light : dark, 1);
+        prev = [x, yy];
+      } else prev = null;
+    }
+    if (slice.due()) yield;
+  }
+  for (let i = 0; i < 7; i++) {
+    let x = minX + hash(seed + i * 13) * (maxX - minX);
+    let y = minY + hash(seed + i * 7) * (maxY - minY) * 0.5;
+    let prev: Point | null = null;
+    for (let k = 0; k < 18; k++) {
+      x += (hash(seed + i * 31 + k) - 0.5) * 10;
+      y += 8 + hash(seed + k) * 8;
+      if (insidePolygon(points, x, y)) {
+        if (prev) pixelLine(ctx, prev, [x, y], dark, 1);
+        prev = [x, y];
+      } else prev = null;
+    }
+  }
+}
 function ceilingAt(x: number) {
   const side = 220 * Math.exp(-Math.max(0, x) / 185) + 115 * Math.exp(-Math.max(0, W - x) / 130);
   const folds = n.fbm(x * 0.012, 4, 3) * 48;
@@ -134,8 +185,8 @@ export function calderaWalkerAt(t: number) {
   // pauses to scan, then advances to the overlook. He does not begin mid-ledge.
   const rollOut = finish((t - 0.5) / 4.6);
   const overlook = finish((t - 6.2) / 3.4);
-  const x = lerp(lerp(170, 430, rollOut), 622, overlook);
-  return { x, deck: groundAt(x), travel: (x - 170) / (622 - 170), rollOut, overlook, supported: x >= -64 && x <= 724 };
+  const x = lerp(lerp(176, 430, rollOut), 622, overlook);
+  return { x, deck: groundAt(x), travel: (x - 176) / (622 - 176), rollOut, overlook, supported: x >= -64 && x <= 724 };
 }
 export function riftCameraAt(t: number) {
   const follow = finish((t - 0.4) / 6.3);
@@ -201,9 +252,13 @@ export const calderaJob = new Job(function* (): Generator<unknown, RiftLayers, u
     let left = W, right = 0;
     for (let y = 0; y < H; y++) {
       const f = y / (SEA + 70);
-      centerline[y] = center + Math.sin(f * 4 + ci) * half * 0.16 + n.noise(y * 0.008, ci) * 9;
+      centerline[y] = center + Math.sin(f * 4 + ci) * half * 0.16 + n.noise(y * 0.008, ci) * 9
+        + n.ridged(y * 0.02, ci * 3 + 5, 2) * 6;
+      // Flowstone buttresses: irregular erosion, slight bedding terraces, and a
+      // widened root instead of smooth extruded cylinders.
       radius[y] = half * (0.45 + 0.22 * n.fbm(y * 0.01, ci + 13, 3)
-        + Math.exp(-f * 9) * 1.15 + Math.exp(-Math.abs(1 - f) * 8) * 0.7);
+        + n.ridged(y * 0.018, ci * 3 + 5, 3) * 0.16 + Math.sin(y * 0.055 + ci) * 0.035
+        + Math.exp(-f * 9) * 1.15 + Math.exp(-Math.abs(1 - f) * 8) * 0.82);
       left = Math.min(left, centerline[y] - radius[y]);
       right = Math.max(right, centerline[y] + radius[y]);
     }
@@ -213,7 +268,9 @@ export const calderaJob = new Job(function* (): Generator<unknown, RiftLayers, u
       const q = (x - centerline[y]) / radius[y];
       if (Math.abs(q) > 1) return;
       const flutes = n.fbm(x * 0.045 + ci * 7, y * 0.004, 3);
-      const lambert = clamp(0.24 + Math.sqrt(Math.max(0, 1 - q * q)) * 0.38 + q * 0.18 + (flutes - 0.5) * 0.56);
+      const fracture = Math.abs(n.noise(x * 0.09, y * 0.002 + ci) - 0.5) < 0.018 ? -0.16 : 0;
+      const bedding = Math.sin(y * 0.08 + x * 0.012 + ci) * 0.035;
+      const lambert = clamp(0.24 + Math.sqrt(Math.max(0, 1 - q * q)) * 0.38 + q * 0.18 + (flutes - 0.5) * 0.56 + fracture + bedding);
       const k = band(lambert, 9, x, y);
       for (let c = 0; c < 3; c++) o[c] = deep[c] + (lit[c] - deep[c]) * k * 0.66;
       o[3] = 255;
@@ -222,6 +279,7 @@ export const calderaJob = new Job(function* (): Generator<unknown, RiftLayers, u
 
   const [geology, g] = makeCanvas(W, H);
   yield* rockTextureGen(g, RIGHT_WALL, '#283e3e', '#b8a980', 61);
+  yield* beddingGen(g, RIGHT_WALL, 61, '#1f3230', '#6f7358');
   // Eroded benches belong to the same cliff, not disconnected floating slabs.
   for (let i = 0; i < BENCHES.length; i++) {
     const profile = BENCHES[i];
@@ -270,6 +328,7 @@ export const calderaJob = new Job(function* (): Generator<unknown, RiftLayers, u
 
   const [ledge, path] = makeCanvas(W, H);
   yield* rockTextureGen(path, LEDGE, '#233c43', '#9eaa8a', 125);
+  yield* beddingGen(path, LEDGE, 125, '#182c31', '#7f927d');
   for (let i = 1; i < PATH_TOP.length; i++) {
     const a = PATH_TOP[i - 1], b = PATH_TOP[i];
     pixelLine(path, a, b, '#b4baa0', 2);
@@ -281,32 +340,54 @@ export const calderaJob = new Job(function* (): Generator<unknown, RiftLayers, u
     yield* rockTextureGen(path, stone(x, y, 5 + hash(i) * 8, 4 + hash(i * 3) * 6, i + 5), '#20373c', '#7f927d', i + 141);
   }
 
-  // The 186 m adit is a rock portal founded on the walking ledge. Back and front
-  // layers let CUBE emerge through the mouth instead of spawning in front of it.
+  // The 186 m adit is cut into a limestone shoulder. The back layer carries the
+  // receding tunnel; the front layer is solid rock + timber that occludes CUBE.
   const [portalBack, pb] = makeCanvas(PORTAL.w, PORTAL.h);
-  const berm: Point[] = [[0, 250], [18, 180], [70, 120], [150, 86], [238, 124], [310, 210], [330, 270], [0, 270]];
-  yield* rockTextureGen(pb, berm, '#233c43', '#9eaa8a', 126);
-  polygon(pb, [[98, 224], [98, 150], [112, 136], [178, 136], [192, 150], [192, 224]], '#0a1418');
-  for (let y = 140; y < 224; y += 4) px(pb, 100, y, 90, 2, y % 12 === 0 ? '#101c22' : '#0c161c');
-  pixelLine(pb, [100, 222], [190, 222], '#3a4a44', 2);
-  const [portalFront, pf] = makeCanvas(PORTAL.w, PORTAL.h);
-  for (const x of [92, 194]) {
-    px(pf, x, 132, 8, 96, '#1b232b');
-    px(pf, x + 1, 132, 5, 96, '#5a422a');
-    px(pf, x + 1, 132, 1, 96, '#8a6a44');
-    for (let y = 140; y < 224; y += 16) px(pf, x + 2, y, 4, 2, '#2a2e36');
+  // A side-driving adit: the recess recedes to the LEFT, while the right side is
+  // open cavern. There is no exit-side pillar for the rig to phase through.
+  polygon(pb, [[114, 226], [114, 176], [124, 154], [146, 140], [176, 136],
+    [208, 146], [228, 160], [236, 170], [236, 226]], '#071014');
+  polygon(pb, [[114, 226], [236, 226], [220, 210], [130, 210]], '#1a2326');
+  pixelLine(pb, [124, 226], [142, 210], '#3a4a44', 1);
+  pixelLine(pb, [224, 226], [208, 210], '#2a3a34', 1);
+  for (let i = 0; i < 3; i++) {
+    const x = 118 + i * 14, yTop = 150 + i * 6, yBot = 222 - i * 4;
+    ctxAlpha(pb, 0.5 - i * 0.12, () => {
+      px(pb, x, yTop, 3, yBot - yTop, '#2a2e36');
+      px(pb, x, yTop - 3, 34 - i * 8, 3, '#2a2e36');
+    });
   }
-  px(pf, 88, 126, 118, 12, '#1b232b');
-  px(pf, 89, 127, 116, 9, '#5a422a');
-  px(pf, 89, 127, 116, 2, '#8a6a44');
-  pixelLine(pf, [96, 138], [118, 160], '#3a3a40', 3);
-  pixelLine(pf, [198, 138], [176, 160], '#3a3a40', 3);
-  px(pf, 128, 128, 38, 7, '#0b0f16');
-  px(pf, 129, 129, 36, 5, '#1d3326');
+  const [portalFront, pf] = makeCanvas(PORTAL.w, PORTAL.h);
+  const SHOULDER: Point[] = [[0, 232], [0, 168], [34, 122], [88, 90], [150, 84],
+    [206, 112], [236, 140], [246, 152], [244, 156], [228, 152], [208, 146],
+    [176, 136], [146, 140], [124, 154], [114, 176], [114, 232]];
+  yield* rockTextureGen(pf, SHOULDER, '#233c43', '#9eaa8a', 126);
+  yield* beddingGen(pf, SHOULDER, 126, '#182c31', '#7f927d');
+  // Stone footing ties the near timber leg into the walking ledge.
+  yield* rockTextureGen(pf, [[102, 232], [104, 220], [122, 220], [124, 232]], '#3a4b42', '#a8aa79', 127);
+  // Near jamb only; the travel lane to the right remains completely open.
+  px(pf, 108, 136, 12, 90, '#1b232b');
+  px(pf, 109, 136, 9, 90, '#5a422a');
+  px(pf, 109, 136, 2, 90, '#8a6a44');
+  px(pf, 117, 136, 1, 90, '#2a2018');
+  for (let y = 144; y < 222; y += 16) px(pf, 110, y, 6, 2, '#2a2e36');
+  px(pf, 104, 124, 140, 14, '#1b232b');
+  px(pf, 105, 125, 138, 11, '#5a422a');
+  px(pf, 105, 125, 138, 2, '#8a6a44');
+  pixelLine(pf, [112, 138], [126, 150], '#3a3a40', 3);
+  // Contact shadow under the lintel, kept above the clear travel lane.
+  ctxAlpha(pf, 0.35, () => px(pf, 114, 138, 126, 2, '#041014'));
   yield;
 
   const [foreground, f] = makeCanvas(W, H);
   yield* rockTextureGen(f, CEILING, '#071b24', '#42635e', 151);
+  yield* beddingGen(f, CEILING, 151, '#04121a', '#2e4a44');
+  // Dripstone is fused to the ceiling contour, not floating icicles.
+  for (const [x, len, w] of [[250, 46, 12], [650, 62, 16], [1050, 38, 10], [1450, 70, 18]]) {
+    const y = ceilingAt(x);
+    polygon(f, [[x - w, y - 4], [x + w, y - 4], [x + w * 0.35, y + len * 0.55], [x, y + len], [x - w * 0.3, y + len * 0.6]], '#0a2029');
+    pixelLine(f, [x - w * 0.4, y], [x - 1, y + len * 0.8], '#2e4a44', 1);
+  }
   yield* rockTextureGen(f, [[-64, 864], [19, 860], [60, 868], [96, 895], [142, 897],
     [190, 935], [226, 960], [283, 1024], [-64, 1024]], '#071c25', '#536b5d', 154);
   yield* rockTextureGen(f, [[1623, 1024], [1660, 932], [1706, 907], [1748, 839],
@@ -449,7 +530,8 @@ export function drawCalderaScene(ctx: CanvasRenderingContext2D, t: number) {
   ctx.drawImage(layers.portalBack, PORTAL.x, PORTAL.y);
 
   // Both tread edges clear the slope, not just the centre of the rig.
-  const s = 1.85;
+  // Slight perspective growth as he leaves the deep adit and reaches the ledge.
+  const s = lerp(1.5, 1.85, finish((walker.x - 176) / 90));
   const supportY = Math.min(groundAt(walker.x - s * 12), groundAt(walker.x), groundAt(walker.x + s * 12));
   const glance = finish((t - 7.5) / 2.1);
   ellipse(ctx, walker.x, supportY + 1, 21, 2, 'rgba(2,12,17,0.5)');
@@ -482,18 +564,6 @@ export function drawCalderaScene(ctx: CanvasRenderingContext2D, t: number) {
   ctx.drawImage(layers.foreground, 0, 0);
   ctx.restore();
 
-  // The scan confirms what the promise needs: a viable power source for the outpost.
-  const scanA = finish((t - 8.6) / 0.8) * (1 - finish((t - 13.2) / 0.9));
-  if (scanA > 0.01) {
-    ctx.save(); ctx.globalAlpha = scanA;
-    hudPanel(ctx, 24, 282, 206, 46, '#d8c37c');
-    ctx.textAlign = 'left'; ctx.font = '6px "Press Start 2P", monospace';
-    ctx.fillStyle = '#e6d8a8'; ctx.fillText('DEPOSIT SCAN', 34, 298);
-    ctx.font = '5px "Press Start 2P", monospace';
-    ctx.fillStyle = '#9ebbb7'; ctx.fillText('HEART-01 // SULFUR', 34, 311);
-    ctx.fillStyle = '#4ade80'; ctx.fillText('VIABLE // POWER FOR THE OUTPOST', 34, 322);
-    ctx.restore();
-  }
   px(ctx, 0, 0, 640, 12, '#07121a'); px(ctx, 0, 348, 640, 12, '#07121a');
   if (t > 14.2) {
     ctx.save(); ctx.globalAlpha = finish((t - 14.2) / 1.6);

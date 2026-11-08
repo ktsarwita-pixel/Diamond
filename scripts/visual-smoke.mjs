@@ -183,7 +183,15 @@ try {
       x: 423, y: 268, s: 2.15, t: 0, look: CHARACTERS.mara.look, pose: 'reach', reachProgress: 1, facing: 1,
     }).core;
     const gripper = [promiseContact.cubeX - 19 * 3.5, 268 - 15 * 3.5 + (promiseContact.serviceArmY + 1.5) * 3.5];
+    const promiseTexts = [];
+    const oldFillText = g.fillText;
+    g.fillText = function (text, ...args) { promiseTexts.push(String(text)); return oldFillText.call(this, text, ...args); };
+    g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, 640, 360);
+    CUTSCENE[9].draw(g, 5.2, CUTSCENE[9].duration);
+    g.fillText = oldFillText;
     const promiseScene = {
+      noServiceHud: !promiseTexts.some(text => /CELL|ACCEPTED|POWER|SCAN|VIABLE|DEPOSIT/i.test(text)),
+      physicalPort: promiseSamples.every(p => (p.cellCharge === 0 || p.seat > 0.9) && (p.ready === 0 || p.cellCharge > 0.99)),
       contactGap: Math.hypot(offerCore[0] - gripper[0], offerCore[1] - gripper[1]),
       continuity: promiseSamples[0].maraX === 396 && promiseSamples[0].cubeX === 548 && promiseSamples[0].gusX === 344 && promiseSamples[0].ilseX === 452,
       singleOwner: promiseSamples.every((p, i) => p.accepted === (i * 0.05 >= 3.6)),
@@ -363,12 +371,24 @@ try {
     const renderedLedgeComponents = islands(calderaJob.get().ledge, 1);
     const riftArrival = Array.from({ length: 361 }, (_, i) => calderaWalkerAt(i * 0.05));
     const portal = riftGeometry.portal;
+    const portalFront = calderaJob.get().portalFront.getContext('2d');
+    const lane = portal.travelLane;
+    const lanePixels = portalFront.getImageData(lane.x - portal.x, lane.y - portal.y, lane.w, lane.h).data;
+    let laneOpaque = 0;
+    for (let i = 3; i < lanePixels.length; i += 4) if (lanePixels[i] > 8) laneOpaque++;
     const riftStory = {
       startsInAdit: riftArrival[0].x > portal.opening.x && riftArrival[0].x < portal.opening.x + portal.opening.w,
       deckMeetsMouth: Math.abs(riftArrival[0].deck - (portal.opening.y + portal.opening.h)) < 6,
       monotonic: riftArrival.every((p, i) => i === 0 || p.x >= riftArrival[i - 1].x),
       supported: riftArrival.every(p => p.supported),
       scanThenAdvance: riftArrival.find(p => p.x >= 420).x < riftArrival[riftArrival.length - 1].x,
+      noExitPillar: !('rightReturn' in portal),
+      clearTravelLane: laneOpaque === 0,
+      exitsWithoutClipping: riftArrival.every(p => {
+        const s = 1.5 + 0.35 * Math.min(1, Math.max(0, (p.x - 176) / 90)) ** 3;
+        const left = p.x - 13 * s, top = p.deck - 28 * s;
+        return left < portal.opening.x || (left >= portal.leftJamb.x + portal.leftJamb.w && top > portal.lintel.y + portal.lintel.h);
+      }),
     };
     return {
       sceneResults, buildings, humans, opened, moved, connectivity, liteScenes, scene3Grounding,
@@ -398,6 +418,7 @@ try {
   assert.equal(report.renderedRockComponents, 1, 'Detached rock or mineral pixels in the final cliff layer');
   assert.equal(report.renderedLedgeComponents, 1, 'Detached rock fragments beside the walking ledge');
   assert.ok(report.promiseScene.contactGap < 0.75, `Cell misses CUBE's gripper by ${report.promiseScene.contactGap}px`);
+  assert.ok(report.promiseScene.noServiceHud && report.promiseScene.physicalPort, `Promise still uses a fake service HUD or nonphysical intake: ${JSON.stringify(report.promiseScene)}`);
   assert.ok(report.promiseScene.continuity && report.promiseScene.singleOwner && report.promiseScene.seatMonotonic && report.promiseScene.chargeMonotonic && report.promiseScene.readyOnlyAfterCharge, `Promise staging/ownership/power order is broken: ${JSON.stringify(report.promiseScene)}`);
   assert.equal(report.promiseScene.phases, 'approach,offer,transfer,accept,home');
   for (const [key, value] of Object.entries(report.lowHullFlight)) assert.ok(value, `Low-hull flight check failed: ${key}`);
@@ -452,7 +473,7 @@ try {
     await mobile.close();
   }
   assert.deepEqual(errors, [], 'No browser runtime errors are allowed');
-  console.log(`PASS: promise cell handoff/ownership, rift adit arrival, low-hull flight misfires, disposal contact/pivot/release, tram boarding, supported connected rocks, ${report.groundContact.samples} planted low-health poses, all 12 HD/Lite scenes, buildings, interactions, controls, and mobile layouts.`);
+  console.log(`PASS: promise handoff without fake HUD, clear-side adit exit, low-hull flight misfires, disposal contact/pivot/release, tram boarding, supported connected rocks, ${report.groundContact.samples} planted low-health poses, all 12 HD/Lite scenes, buildings, interactions, controls, and mobile layouts.`);
 } finally {
   await browser.close();
 }

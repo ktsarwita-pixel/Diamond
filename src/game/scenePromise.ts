@@ -31,10 +31,13 @@ export function promiseBeatAt(t: number) {
   const seat = ease(clamp((t - 4.25) / 0.95));
   const charge = lerp(0.18, 1, ease(clamp((t - 4.8) / 1.15)));
   const ready = ease(clamp((t - 7.5) / 1.3));
+  // Physical intake hatch + hull charge lamps replace the floating service UI.
+  const portOpen = ease(clamp((t - 3.65) / 0.55)) * (1 - ease(clamp((t - 5.15) / 0.55)));
+  const cellCharge = ease(clamp((t - 5.25) / 1.0));
   const push = easeInOut(clamp((t - 1.1) / 6.8));
   const phase: PromisePhase = t < 1.9 ? 'approach' : t < 3.45 ? 'offer' : t < 4.8 ? 'transfer' : t < 6.2 ? 'accept' : 'home';
   return {
-    phase, clear, approach, reach, service, accepted, seat, charge, ready, push,
+    phase, clear, approach, reach, service, accepted, seat, charge, ready, portOpen, cellCharge, push,
     maraX: lerp(396, 423, approach),
     cubeX: lerp(548, CUBE_TARGET, approach),
     gusX: lerp(344, 318, clear),
@@ -110,13 +113,16 @@ export function drawPromiseScene(ctx: CanvasRenderingContext2D, t: number) {
     const cubeY = DECK - 15 * CUBE_S;
     heroRobot(ctx, {
       x: b.cubeX, y: cubeY, s: CUBE_S, t, flip: true, chassisMotion: false,
-      state: b.charge > 0.85 ? 'happy' : 'idle',
-      eye: b.phase === 'offer' || b.phase === 'transfer' ? 'scan' : b.charge > 0.85 ? 'happy' : 'normal',
+      state: t > 6.2 ? 'happy' : 'idle',
+      eye: t < 5.2 ? 'scan' : t > 6.2 ? 'happy' : 'normal',
       look: 1, drill: true, drillAngle: lerp(2.35, 0.42, b.ready), drillExtend: 0.1,
       drillSpin: b.ready > 0.9 ? t * 0.4 : 0,
       serviceArm: b.service, serviceArmY: SERVICE_Y,
+      cellPort: b.portOpen, cellCharge: b.cellCharge,
       wheelPhase: (548 - b.cubeX) / (3 * CUBE_S), paintMix: 1,
-      power: lerp(0.62, 1, b.charge),
+      // Stable hull power: acceptance is shown by the cell hatch, lamps and eyes,
+      // not a flickering full-body overlay or a fake clickable readout.
+      power: 1,
     });
 
     // One cell, one owner: palm -> gripper -> front intake. Never duplicated.
@@ -125,7 +131,7 @@ export function drawPromiseScene(ctx: CanvasRenderingContext2D, t: number) {
       const portY = cubeY + 2 * CUBE_S;
       const x = lerp(OFFER.core[0], portX, b.seat);
       const y = lerp(OFFER.core[1], portY, b.seat);
-      if (b.seat < 0.98) powerCell(ctx, x, y, t, 1 - b.seat * 0.5);
+      if (b.seat < 0.96) powerCell(ctx, x, y, t, 1 - b.seat * 0.5);
       if (b.seat > 0.7) glowAt(ctx, portX, portY, 18, '#fde047', (b.seat - 0.7) * 0.5 * (1 - ease(clamp((t - 5.6) / 1.2))));
     }
     if (b.service > 0.95 && b.reach > 0.95) {
@@ -133,20 +139,6 @@ export function drawPromiseScene(ctx: CanvasRenderingContext2D, t: number) {
       if (t > 3.45 && t < 3.95) sparksAt(ctx, OFFER.core[0], OFFER.core[1], t, 55, 7, 12);
     }
 
-    // A small diegetic service readout makes the mutual promise legible:
-    // the cell is accepted, power rises, and only then does the crew celebrate.
-    const hudA = ease(clamp((t - 1.2) / 0.6));
-    if (hudA > 0) {
-      ctx.save(); ctx.globalAlpha = hudA;
-      const hx = b.cubeX - 34, hy = 142;
-      R(ctx, hx, hy, 68, 26, 'rgba(9,8,15,0.86)');
-      R(ctx, hx, hy, 68, 2, b.charge > 0.6 ? '#4ade80' : '#fbbf24');
-      ctx.font = '5px "Press Start 2P", monospace'; ctx.textAlign = 'left';
-      ctx.fillStyle = '#9ebbb7'; ctx.fillText(b.accepted ? 'CELL ACCEPTED' : 'POWER CELL', hx + 5, hy + 10);
-      R(ctx, hx + 5, hy + 15, 58, 6, INK);
-      R(ctx, hx + 7, hy + 17, 54 * b.charge, 2, b.charge > 0.6 ? '#4ade80' : '#fbbf24');
-      ctx.restore();
-    }
     motes(ctx, t, 14, '#f7cb9a', 80, 230);
   });
   filmLighting(ctx, '#191322', 0.32);
