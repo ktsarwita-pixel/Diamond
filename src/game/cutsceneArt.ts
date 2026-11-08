@@ -615,6 +615,8 @@ export interface HeroRobotOpts {
   brokenWheel?: boolean;
   /** 0..1 extension of the small front service manipulator arm (Scene 10 handshake). */
   serviceArm?: number;
+  /** Local vertical offset of the service wrist so it can meet a human palm exactly. */
+  serviceArmY?: number;
   /** Disable free idle bob when a shot supplies exact physical contact poses. */
   chassisMotion?: boolean;
 }
@@ -837,12 +839,13 @@ export function heroRobot(ctx: CanvasRenderingContext2D, o: HeroRobotOpts) {
   if ((o.serviceArm ?? 0) > 0.02) {
     const ext = clamp(o.serviceArm ?? 0);
     const armLen = Math.round(3 + ext * 7);
-    P(8, 0, armLen, 3, INK);
-    P(8, 1, armLen - 1, 1, '#94a3b8');
+    const ay = o.serviceArmY ?? 0;
+    P(8, ay, armLen, 3, INK);
+    P(8, ay + 1, armLen - 1, 1, '#94a3b8');
     // Small two-pronged wrist gripper
-    P(8 + armLen - 1, -1, 3, 5, INK);
-    P(8 + armLen, -1, 2, 1, '#cbd5e1');
-    P(8 + armLen, 3, 2, 1, '#cbd5e1');
+    P(8 + armLen - 1, ay - 1, 3, 5, INK);
+    P(8 + armLen, ay - 1, 2, 1, '#cbd5e1');
+    P(8 + armLen, ay + 3, 2, 1, '#cbd5e1');
   }
   // shoulder plate
   P(-10, -6, 4, 7, '#59606e');

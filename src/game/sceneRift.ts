@@ -1,5 +1,5 @@
 import { clamp, hash, heroRobot, mix, shade } from './cutsceneArt';
-import { Job, band, hex3, lerp, makeCanvas, makeNoise, paintPixelsGen, sliceTimer } from './cineKit';
+import { Job, band, hex3, hudPanel, lerp, makeCanvas, makeNoise, paintPixelsGen, sliceTimer } from './cineKit';
 import { isLite, qn } from './quality';
 import { ellipse, pixelGlow, pixelLine, polygon, px, rockTextureGen, type Point } from './pixelCraft';
 
@@ -37,6 +37,7 @@ const HEART_CHANNEL: Point[] = [[1666, 526], [1620, 543], [1612, 580], [1600, 62
   [1548, 646], [1462, 652], [1388, 646], [1332, 634], [1261, 632], [1234, 630]];
 const HEART_SEAM: Point[] = [[1604, 250], [1560, 320], [1548, 372], [1572, 420],
   [1600, 470], [1612, 520], [1598, 566]];
+const PORTAL = { x: 40, y: 440, w: 360, h: 300, opening: { x: 138, y: 576, w: 94, h: 88 } } as const;
 const finish = (x: number) => { const t = clamp(x); return t * t * t * (10 + t * (-15 + t * 6)); };
 const n = makeNoise(124612);
 
@@ -120,6 +121,7 @@ export const riftGeometry = {
   ledge: LEDGE, rightWall: RIGHT_WALL, ceiling: CEILING,
   boulders: TALUS.map((s) => s.points), waterline: SEA, benches: BENCHES,
   boulderSupports: TALUS.map(({ contact, supportY, bench }) => ({ contact, supportY, bench })),
+  portal: PORTAL,
   heart: {
     root: HEART_ROOT, seam: HEART_SEAM, channel: HEART_CHANNEL,
     crystals: HEART_CRYSTALS.map(c => ({ ...c, footprint: [
@@ -128,9 +130,12 @@ export const riftGeometry = {
   },
 };
 export function calderaWalkerAt(t: number) {
-  const travel = finish((t - 0.35) / 7.2);
-  const x = lerp(244, 622, travel);
-  return { x, deck: groundAt(x), travel, supported: x >= -64 && x <= 724 };
+  // Chapter 11's cage reaches the 186 m level; CUBE rolls OUT of the old adit,
+  // pauses to scan, then advances to the overlook. He does not begin mid-ledge.
+  const rollOut = finish((t - 0.5) / 4.6);
+  const overlook = finish((t - 6.2) / 3.4);
+  const x = lerp(lerp(170, 430, rollOut), 622, overlook);
+  return { x, deck: groundAt(x), travel: (x - 170) / (622 - 170), rollOut, overlook, supported: x >= -64 && x <= 724 };
 }
 export function riftCameraAt(t: number) {
   const follow = finish((t - 0.4) / 6.3);
@@ -168,6 +173,8 @@ interface RiftLayers {
   foreground: HTMLCanvasElement;
   reflection: HTMLCanvasElement;
   mist: HTMLCanvasElement;
+  portalBack: HTMLCanvasElement;
+  portalFront: HTMLCanvasElement;
 }
 
 export const calderaJob = new Job(function* (): Generator<unknown, RiftLayers, unknown> {
@@ -274,6 +281,30 @@ export const calderaJob = new Job(function* (): Generator<unknown, RiftLayers, u
     yield* rockTextureGen(path, stone(x, y, 5 + hash(i) * 8, 4 + hash(i * 3) * 6, i + 5), '#20373c', '#7f927d', i + 141);
   }
 
+  // The 186 m adit is a rock portal founded on the walking ledge. Back and front
+  // layers let CUBE emerge through the mouth instead of spawning in front of it.
+  const [portalBack, pb] = makeCanvas(PORTAL.w, PORTAL.h);
+  const berm: Point[] = [[0, 250], [18, 180], [70, 120], [150, 86], [238, 124], [310, 210], [330, 270], [0, 270]];
+  yield* rockTextureGen(pb, berm, '#233c43', '#9eaa8a', 126);
+  polygon(pb, [[98, 224], [98, 150], [112, 136], [178, 136], [192, 150], [192, 224]], '#0a1418');
+  for (let y = 140; y < 224; y += 4) px(pb, 100, y, 90, 2, y % 12 === 0 ? '#101c22' : '#0c161c');
+  pixelLine(pb, [100, 222], [190, 222], '#3a4a44', 2);
+  const [portalFront, pf] = makeCanvas(PORTAL.w, PORTAL.h);
+  for (const x of [92, 194]) {
+    px(pf, x, 132, 8, 96, '#1b232b');
+    px(pf, x + 1, 132, 5, 96, '#5a422a');
+    px(pf, x + 1, 132, 1, 96, '#8a6a44');
+    for (let y = 140; y < 224; y += 16) px(pf, x + 2, y, 4, 2, '#2a2e36');
+  }
+  px(pf, 88, 126, 118, 12, '#1b232b');
+  px(pf, 89, 127, 116, 9, '#5a422a');
+  px(pf, 89, 127, 116, 2, '#8a6a44');
+  pixelLine(pf, [96, 138], [118, 160], '#3a3a40', 3);
+  pixelLine(pf, [198, 138], [176, 160], '#3a3a40', 3);
+  px(pf, 128, 128, 38, 7, '#0b0f16');
+  px(pf, 129, 129, 36, 5, '#1d3326');
+  yield;
+
   const [foreground, f] = makeCanvas(W, H);
   yield* rockTextureGen(f, CEILING, '#071b24', '#42635e', 151);
   yield* rockTextureGen(f, [[-64, 864], [19, 860], [60, 868], [96, 895], [142, 897],
@@ -291,7 +322,7 @@ export const calderaJob = new Job(function* (): Generator<unknown, RiftLayers, u
     mg.globalAlpha = Math.round((1 - q) * (0.25 + n.noise(x * 0.06, y * 0.1) * 0.4) * 5) / 5;
     px(mg, x, y, 1, 1, '#bbd1ba');
   }
-  return { distant, geology, ledge, foreground, reflection, mist };
+  return { distant, geology, ledge, foreground, reflection, mist, portalBack, portalFront };
 });
 
 export function getCaldera() { return calderaJob.get(); }
@@ -415,6 +446,7 @@ export function drawCalderaScene(ctx: CanvasRenderingContext2D, t: number) {
     ctx.restore();
   }
   ctx.drawImage(layers.ledge, 0, 0);
+  ctx.drawImage(layers.portalBack, PORTAL.x, PORTAL.y);
 
   // Both tread edges clear the slope, not just the centre of the rig.
   const s = 1.85;
@@ -423,15 +455,25 @@ export function drawCalderaScene(ctx: CanvasRenderingContext2D, t: number) {
   ellipse(ctx, walker.x, supportY + 1, 21, 2, 'rgba(2,12,17,0.5)');
   heroRobot(ctx, {
     x: walker.x, y: supportY - 15 * s - 0.55, s, t,
-    state: t < 7.5 ? 'idle' : 'happy', chassisMotion: false, paintMix: 1,
-    drill: true, drillAngle: lerp(0.2, -0.45, glance), drillExtend: 0.12,
-    drillSpin: 0, wheelPhase: walker.travel * 15.4, eye: t > 7.8 ? 'normal' : 'scan', look: 1,
+    state: t < 9.6 ? 'idle' : 'happy', chassisMotion: false, paintMix: 1,
+    drill: true, drillAngle: 0.22, drillExtend: 0.12,
+    drillSpin: 0, wheelPhase: walker.travel * 24, eye: t > 9.6 ? 'normal' : 'scan', look: 1,
   });
   const bx = walker.x + 8, by = supportY - 42;
   ctx.save(); ctx.globalAlpha = 0.08;
   polygon(ctx, [[bx, by], [bx + 170, by - 32 - glance * 28], [bx + 170, by + 18]], '#e0e9cd');
   ctx.restore();
   pixelGlow(ctx, bx, by, 24, '#e2eccb', 0.28);
+  // Front jambs/lintel pass in front of the emerging rig; interior gloom lifts
+  // only as he rolls through the mouth.
+  ctx.drawImage(layers.portalFront, PORTAL.x, PORTAL.y);
+  const gloom = 1 - finish((t - 0.5) / 2.1);
+  if (gloom > 0.01) {
+    ctx.save();
+    ctx.beginPath(); ctx.rect(PORTAL.opening.x, PORTAL.opening.y, PORTAL.opening.w, PORTAL.opening.h); ctx.clip();
+    ctx.globalAlpha = gloom * 0.78; px(ctx, PORTAL.opening.x, PORTAL.opening.y, PORTAL.opening.w, PORTAL.opening.h, '#0a1418');
+    ctx.restore();
+  }
   for (const [x, y, phase] of [[1464, 470, 0], [1505, 497, 2], [1390, 558, 4]]) {
     if (Math.sin(t * 1.3 + phase) > 0.78) {
       px(ctx, x - 2, y, 5, 1, '#f5efcf'); px(ctx, x, y - 2, 1, 5, '#f5efcf');
@@ -440,17 +482,29 @@ export function drawCalderaScene(ctx: CanvasRenderingContext2D, t: number) {
   ctx.drawImage(layers.foreground, 0, 0);
   ctx.restore();
 
+  // The scan confirms what the promise needs: a viable power source for the outpost.
+  const scanA = finish((t - 8.6) / 0.8) * (1 - finish((t - 13.2) / 0.9));
+  if (scanA > 0.01) {
+    ctx.save(); ctx.globalAlpha = scanA;
+    hudPanel(ctx, 24, 282, 206, 46, '#d8c37c');
+    ctx.textAlign = 'left'; ctx.font = '6px "Press Start 2P", monospace';
+    ctx.fillStyle = '#e6d8a8'; ctx.fillText('DEPOSIT SCAN', 34, 298);
+    ctx.font = '5px "Press Start 2P", monospace';
+    ctx.fillStyle = '#9ebbb7'; ctx.fillText('HEART-01 // SULFUR', 34, 311);
+    ctx.fillStyle = '#4ade80'; ctx.fillText('VIABLE // POWER FOR THE OUTPOST', 34, 322);
+    ctx.restore();
+  }
   px(ctx, 0, 0, 640, 12, '#07121a'); px(ctx, 0, 348, 640, 12, '#07121a');
   if (t > 14.2) {
     ctx.save(); ctx.globalAlpha = finish((t - 14.2) / 1.6);
     ctx.textAlign = 'left'; ctx.font = '6px "Press Start 2P", monospace';
-    ctx.fillStyle = '#9ebbb7'; ctx.fillText('186 METERS BELOW / THE SUNKEN RIFT', 25, 34);
+    ctx.fillStyle = '#9ebbb7'; ctx.fillText('186 METERS BELOW / FIRST SHIFT', 25, 34);
     ctx.font = '20px "Press Start 2P", monospace';
     ctx.fillStyle = '#081a23'; ctx.fillText('SULFURED CAVES', 27, 66);
     ctx.fillStyle = '#e6d8a8'; ctx.fillText('SULFURED CAVES', 25, 64);
     px(ctx, 25, 78, 72, 1, '#c7b681');
     ctx.font = '6px "Press Start 2P", monospace';
-    ctx.fillStyle = '#b2c8bd'; ctx.fillText('THE WORLD DID NOT END. IT WENT DEEPER.', 25, 93);
+    ctx.fillStyle = '#b2c8bd'; ctx.fillText('THE HEART OF SULFUR. POWER FOR A NEW HOME.', 25, 93);
     ctx.restore();
   }
 }

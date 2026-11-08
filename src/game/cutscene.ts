@@ -34,6 +34,8 @@ import type { Job } from './cineKit';
 import { drawStorySet, prepareStorySet, storyAtmosphere, storySetJobs, type StorySet } from './storyWorlds';
 import { drawWorkshopScene, workshopJob } from './sceneWorkshop';
 import { HABITAT_OPENING } from './outpostArt';
+import { PROMISE_DURATION, drawPromiseScene } from './scenePromise';
+export { promiseBeatAt, promiseContact } from './scenePromise';
 import { polygon } from './pixelCraft';
 import { DEPARTURE_DURATION, drawScientistDeparture } from './sceneDeparture';
 export { scientistDepartureAt } from './sceneDeparture';
@@ -495,90 +497,18 @@ export const CUTSCENE: CutsceneScene[] = [
   },
 
   /* ================================================================ *
-   *  10. A PROMISE — CLEAR, SMOOTH PACT BETWEEN MARA & CUBE-07
+   *  10. A PROMISE — ONE CELL, ONE OWNER, A MUTUAL PACT
    * ================================================================ */
   {
     id: 'the-deal',
     chapter: '10 / A PROMISE',
     set: 'outpost',
-    duration: 7.2,
+    duration: PROMISE_DURATION,
     speaker: 'mara',
-    text: '"Mine for us, little one. We will keep you running." For the first time, CUBE-07 had a home.',
+    text: '"Take our last power cell. Mine for us, and we will keep you running." CUBE-07 accepted. For the first time, he had a home.',
+    sfx: 'boot',
     draw(ctx, t) {
-      camera(ctx, -32, -20, 1.06 + ease(t / 7.2) * 0.06, () => {
-        drawStorySet(ctx, 'outpost', 38, t);
-
-        // Share the actual doorway bounds with the building renderer.
-        const doorL = 243 + HABITAT_OPENING.left - 38;
-        const dw = { left: doorL, top: 268 + HABITAT_OPENING.top, width: HABITAT_OPENING.width, height: HABITAT_OPENING.height, sill: 268, gloom: '#0d0a08' };
-        for (let i = 0; i < 3; i++) {
-          // They ease forward to the threshold as the pact is made.
-          const k = lerp(0.62 - i * 0.12, 0.86 - i * 0.08, easeInOut(clamp((t - 2.6) / 1.4)));
-          humanThroughDoorway(ctx, { ...dw, k }, {
-            x: doorL + 10 + i * 8,
-            y: 268,
-            s: 1.9,
-            t: t + i,
-            look: crowdLook(i + 2),
-            pose: t > 3.3 + i * 0.2 ? 'cheer' : 'idle',
-            facing: 1,
-            dim: 0.2,
-          });
-        }
-        // Outpost crew gathered on the deck (all feet on the sill at y=268)
-        cinematicHuman(ctx, { x: 200, y: 268, s: 2.3, t, look: human('pip'), pose: t > 3.4 ? 'cheer' : 'idle', facing: 1, rim: '#ffd9a0' });
-        cinematicHuman(ctx, { x: 244, y: 268, s: 2.55, t: t + 0.4, look: human('gus'), pose: t > 3.2 ? 'cheer' : 'idle', flipProp: 'wrench', facing: 1, rim: '#ffd9a0' });
-        cinematicHuman(ctx, { x: 304, y: 268, s: 2.5, t: t + 0.9, look: human('ilse'), pose: t > 3.5 ? 'wave' : 'idle', flipProp: 'lantern', facing: 1, rim: '#ffd9a0' });
-
-        // Mara steps forward smoothly (t = 0.3..1.5s) and extends the glowing power module (`pose: 'reach'`)
-        const stepIn = easeInOut(clamp((t - 0.25) / 1.25));
-        const maraX = lerp(332, 363, stepIn);
-        const reach = ease(clamp((t - 1.35) / 1.1));
-        cinematicHuman(ctx, {
-          x: maraX,
-          y: 268,
-          s: 3.0,
-          rim: '#ffe2a8',
-          t,
-          look: human('mara'),
-          pose: stepIn < 1 ? 'walk' : reach > 0 ? 'reach' : 'idle',
-          reachProgress: reach,
-          walkPhase: t * 4,
-          talking: t > 1.2 && t < 4.5,
-          facing: 1,
-        });
-
-        // CUBE-07 faces Mara (`flip: true`), keeps its heavy drill tucked safely back (`drillAngle: 2.35`),
-        // and extends its small front service manipulator (`serviceArm: reach`) to meet Mara's hand!
-        heroRobot(ctx, {
-          x: 482,
-          y: stand(268, 4.3),
-          s: 4.3,
-          t,
-          flip: true,
-          state: t > 2.8 ? 'happy' : 'idle',
-          chassisMotion: false,
-          eye: t > 2.8 ? 'happy' : 'normal',
-          look: 1,
-          drill: true,
-          drillAngle: 2.35,
-          drillExtend: 0.1,
-          serviceArm: reach,
-          paintMix: 1,
-        });
-
-        // Warm golden energy exchange where Mara's offered core module meets CUBE-07's gripper!
-        const contact = ease((reach - 0.9) / 0.1);
-        if (contact > 0) {
-          const pulse = 0.55 + 0.45 * Math.sin(t * 6);
-          // Mara's offered core and the flipped service wrist share this point.
-          const meetX = 401;
-          const meetY = 207;
-          glowAt(ctx, meetX, meetY, 30 + pulse * 12, '#fde047', contact * (0.35 + 0.12 * pulse));
-          if (reach > 0.96 && t < 4.5) sparksAt(ctx, meetX, meetY, t, 55, 10, 16);
-        }
-      });
-      filmLighting(ctx, '#191322', 0.35);
+      drawPromiseScene(ctx, t);
     },
   },
 
@@ -605,7 +535,7 @@ export const CUTSCENE: CutsceneScene[] = [
     chapter: '12 / THE SUNKEN RIFT',
     set: null,
     duration: CALDERA_DURATION,
-    text: 'Beyond the shaft, a limestone ledge opened onto an underground sea. In the far wall, the Heart of Sulfur lit a world no sky-city had ever seen.',
+    text: 'The cage left him at the old mine’s lowest adit. CUBE-07 rolled onto a limestone ledge and found the Heart of Sulfur—power enough to keep his new home alive.',
     draw(ctx, t) {
       drawCalderaScene(ctx, t);
     },

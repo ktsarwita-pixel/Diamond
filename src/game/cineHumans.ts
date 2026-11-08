@@ -21,6 +21,8 @@ export interface CineHumanOpts extends HeroHumanOpts {
   dim?: number;
   /** Continuous 0..1 extension for the offered-core reach pose. */
   reachProgress?: number;
+  /** Set false after the offered cell leaves Mara's palm (ownership handoff). */
+  offerCore?: boolean;
 }
 
 // Character palettes repeat on every cinematic and gameplay animation frame.
@@ -637,7 +639,7 @@ function paintCinematicHuman(ctx: CanvasRenderingContext2D, o: CineHumanOpts) {
     ctx.fillStyle = C('#f59e0b');
     ctx.fillRect(hx + 6, hy - 1, 4, 2);
   }
-  if (pose === 'reach') {
+  if (pose === 'reach' && o.offerCore !== false) {
     // glowing Aether power core offered in the palm
     ctx.fillStyle = ink;
     ctx.fillRect(hx + 1, hy - 4, 6, 6);
@@ -657,6 +659,35 @@ function paintCinematicHuman(ctx: CanvasRenderingContext2D, o: CineHumanOpts) {
   ctx.restore();
 
   ctx.restore();
+}
+
+/** Exact world-space palm/core centres for the articulated reach pose.
+ * Scene 10 uses this to seat CUBE's gripper on the offered cell instead of
+ * eyeballing a glow between two independently animated sprites. */
+export function cinematicReachPoint(o: CineHumanOpts): { hand: [number, number]; core: [number, number] } {
+  const p = clamp(o.reachProgress ?? 1);
+  const unit = (o.s ?? 3) * 0.5 * (o.look.small ? 0.8 : 1);
+  const facing = o.facing ?? 1;
+  const HIP_Y = -28, THIGH = 13, SHIN = 11;
+  const sway = 0; // reach pose does not idle-sway
+  const frontLeg: [number, number] = [0.07 + sway, 0.02];
+  const backLeg: [number, number] = [-0.09 + sway, -0.04];
+  const ankleY = (leg: [number, number]) => HIP_Y + Math.cos(leg[0]) * THIGH + Math.cos(leg[1]) * SHIN;
+  const lift = -4 - Math.max(ankleY(frontLeg), ankleY(backLeg));
+  const upper = 0.06 + (1.32 - 0.06) * p;
+  const fore = 0.22 + (1.56 - 0.22) * p;
+  const ex = 2.5 + Math.sin(upper) * 10;
+  const ey = -44.5 + Math.cos(upper) * 10;
+  const hx = ex + Math.sin(fore) * 9;
+  const hy = ey + Math.cos(fore) * 9;
+  const lean = 0.1 * p;
+  const project = (x: number, y: number): [number, number] => {
+    const dy = y - HIP_Y;
+    const rx = Math.cos(lean) * x - Math.sin(lean) * dy;
+    const ry = Math.sin(lean) * x + Math.cos(lean) * dy + HIP_Y + lift;
+    return [o.x + facing * unit * rx, o.y + unit * ry];
+  };
+  return { hand: project(hx, hy), core: project(hx + 4, hy - 1) };
 }
 
 const humanIds = new WeakMap<object, number>();
@@ -705,7 +736,7 @@ export function cinematicHuman(ctx: CanvasRenderingContext2D, o: CineHumanOpts) 
   // the transform, not in the cache key (continuous doorway depth used to mint
   // hundreds of identical atlases and evict the entire cast).
   const key = [id, pose, frame, o.outfit ?? '', o.rim ?? '',
-    o.silhouette ?? '', dim, o.flipProp ?? '', o.talking ? 1 : 0, o.lampOn ? 1 : 0, reachProgress].join(':');
+    o.silhouette ?? '', dim, o.flipProp ?? '', o.talking ? 1 : 0, o.lampOn ? 1 : 0, reachProgress, o.offerCore === false ? 0 : 1].join(':');
   let sprite = cacheGet(cinematicFrames, key);
   if (!sprite) {
     sprite = document.createElement('canvas');

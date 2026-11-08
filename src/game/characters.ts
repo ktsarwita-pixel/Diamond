@@ -1,4 +1,5 @@
 import type { FacingDir } from './types';
+import { faultFlightAt } from './cubeFlight';
 
 /* ================================================================== *
  *  CAST — the old humans of the outpost + CUBE-07
@@ -461,6 +462,10 @@ export function drawCubeMiner(ctx: CanvasRenderingContext2D, p: CubeDrawParams) 
 
   // Breathing — the chassis gently expands while idle, slower when asleep.
   const hurt = !!p.lowHull && !p.godMode;
+  // Airborne low-hull flight gets a struggling twin-jet animation. Grounded
+  // poses keep the planted-tread idle/shutdown rules untouched.
+  const faultFlight = hurt && p.groundY === undefined && p.thrustPower >= 0.1
+    ? faultFlightAt(p.time, p.thrustPower) : null;
   const breathe = idling && !hurt ? Math.sin(p.time * (sleeping ? 1.25 : 2.4)) * (sleeping ? 0.05 : 0.028)
     + (idleAct ? Math.sin(p.time * 0.61) * 0.012 : 0) : 0;
 
@@ -493,14 +498,15 @@ export function drawCubeMiner(ctx: CanvasRenderingContext2D, p: CubeDrawParams) 
   ctx.save();
   // Micro-vibration while the drill bites into rock
   const vib = p.isDrilling ? Math.round(Math.sin(p.time * 62) * 1.2) : 0;
-  const list = stressed ? -0.07 - hurtHeave * 0.02 - (hurtAsleep ? 0.05 : 0) : 0;
+  const list = stressed ? -0.07 - hurtHeave * 0.02 - (hurtAsleep ? 0.05 : 0) : faultFlight ? faultFlight.roll : 0;
   // Healthy idle weight shift: a slow lean from one tread to the other, then back.
   const healthyList = idleAct && idleCycle > 5.5 && idleCycle < 7
     ? Math.sin(((idleCycle - 5.5) / 1.5) * Math.PI) * 0.035 : 0;
   const angle = (p.rotation ?? 0) + list + healthyList;
   const sx = p.squashX * (1 - breathe * 0.6 - hurtSquash * 0.7);
   const sy = p.squashY * (1 + breathe + hurtSquash);
-  const desiredY = p.y + p.bob * 0.6 + (sleeping ? 1 : 0) + vib * 0.4 + sag + Math.round(hurtHeave * 1.5) - jolt;
+  const desiredY = p.y + p.bob * 0.6 + (sleeping ? 1 : 0) + vib * 0.4 + sag + Math.round(hurtHeave * 1.5) - jolt
+    + (faultFlight ? faultFlight.lift : 0);
   const contact = cubeGroundPose(p, sx, sy, angle, desiredY);
   // Keep the lowest tread corner above the real collision floor in every
   // breathing, shutdown, wake-jolt and landing-squash pose.
@@ -557,10 +563,14 @@ export function drawCubeMiner(ctx: CanvasRenderingContext2D, p: CubeDrawParams) 
     const thrusterTier = p.thrusterTier || 1;
     const power2 = p.thrustPower;
     const flick = 0.72 + 0.28 * Math.sin(p.time * 46 + p.x * 0.1);
-    const len = Math.round((4 + power2 * (7 + thrusterTier * 1.5)) * flick);
+    const baseLen = (4 + power2 * (7 + thrusterTier * 1.5)) * flick;
 
     ctx.globalCompositeOperation = 'lighter';
     for (const nx of [-6, 3]) {
+      // A failing hull feeds the nozzles unevenly; one jet can drop to an ember
+      // while the other overcompensates, then they swap on the next cough.
+      const faultFactor = faultFlight ? (nx < 0 ? faultFlight.left : faultFlight.right) / Math.max(power2, 1e-3) : 1;
+      const len = Math.max(1, Math.round(baseLen * faultFactor));
       if (thrusterTier === 1) {
         // Steam Vent: Orange/Amber with smoke puff
         ctx.fillStyle = 'rgba(249,115,22,0.85)';
@@ -602,12 +612,38 @@ export function drawCubeMiner(ctx: CanvasRenderingContext2D, p: CubeDrawParams) 
       }
     }
     ctx.globalCompositeOperation = 'source-over';
+    if (faultFlight && !tint) {
+      const weakX = faultFlight.left <= faultFlight.right ? -6 : 3;
+      // Misfires trail soot and drop a few hot embers instead of vanishing.
+      for (let i = 0; i < 3; i++) {
+        const age = ((p.time * 1.6 + i / 3) % 1 + 1) % 1;
+        ctx.globalAlpha = (1 - age) * faultFlight.smoke * 0.55;
+        ctx.fillStyle = i % 2 ? '#6b7280' : '#9ca3af';
+        const size = 1 + Math.round(age * 3);
+        ctx.fillRect(weakX - 1 + Math.round(age * (weakX < 0 ? -2 : 2)), 8 + Math.round(age * 9), size, size);
+      }
+      if (faultFlight.spark) {
+        ctx.globalAlpha = 0.9;
+        ctx.fillStyle = '#fde047'; ctx.fillRect(weakX, 8, 1, 1);
+        ctx.fillStyle = '#ffffff'; ctx.fillRect(weakX + 1, 9, 1, 1);
+        ctx.fillStyle = '#fb923c'; ctx.fillRect(weakX - 1, 10, 1, 1);
+      }
+      ctx.globalAlpha = 1;
+    }
     ctx.fillStyle = T('#08060e');
     ctx.fillRect(-7, 5, 5, 3);
     ctx.fillRect(2, 5, 5, 3);
     ctx.fillStyle = T(armor.trim);
     ctx.fillRect(-6, 6, 3, 1);
     ctx.fillRect(3, 6, 3, 1);
+    if (faultFlight && !tint) {
+      ctx.globalAlpha = faultFlight.warning;
+      ctx.fillStyle = faultFlight.left <= faultFlight.right ? '#ff5470' : '#fbbf24';
+      ctx.fillRect(-6, 6, 1, 1);
+      ctx.fillStyle = faultFlight.right < faultFlight.left ? '#ff5470' : '#fbbf24';
+      ctx.fillRect(5, 6, 1, 1);
+      ctx.globalAlpha = 1;
+    }
   }
 
   /* ---- Treads & 3-Bogie Suspension ---- */
@@ -746,7 +782,7 @@ export function drawCubeMiner(ctx: CanvasRenderingContext2D, p: CubeDrawParams) 
   // Antenna — rigidly mounted to helmet boss at x=3, y=-11 with connected 2-segment whip
   const sway = Math.max(
     -1,
-    Math.min(1, Math.round(Math.sin(p.time * (idling ? 1.7 : 4.5) + 0.5 + (idleAct ? Math.sin(p.time * 0.37) * 0.4 : 0)) * (idling ? 1.1 : 0.45)))
+    Math.min(1, Math.round(Math.sin(p.time * (idling ? 1.7 : 4.5) + 0.5 + (idleAct ? Math.sin(p.time * 0.37) * 0.4 : 0) + (faultFlight ? Math.sin(p.time * 13) * 0.5 : 0)) * (idling ? 1.1 : 0.45)))
   );
   // Base collar fused into the helmet
   ctx.fillStyle = T('#08060e');
@@ -778,6 +814,7 @@ export function drawCubeMiner(ctx: CanvasRenderingContext2D, p: CubeDrawParams) 
     let eyeColor = tint || (p.godMode ? '#fde047' : p.isDrilling ? '#ffd23f' : '#5cc9ff');
     if (p.combo && p.combo >= 5) eyeColor = '#ff6b2b'; // Blazing fire eyes during combo frenzy!
     if (p.cargoFull) eyeColor = '#fde047'; // Gold eyes on full cargo
+    if (faultFlight) eyeColor = faultFlight.spark ? '#ff8a3d' : '#7dd3fc';
 
     ctx.fillStyle = eyeColor;
     if (sleeping) {

@@ -664,7 +664,7 @@ export function drawShaftScene(ctx: CanvasRenderingContext2D, t: number, duratio
   ctx.fillStyle = vg;
   ctx.fillRect(0, 0, CW, CH);
 
-  const depthMeters = Math.round(descent * 185);
+  const depthMeters = Math.round(descent * 186);
   const stratum = depthMeters < 36 ? 'ASH & TOPSOIL' : depthMeters < 86 ? 'SULFUR LIMESTONE' : depthMeters < 141 ? 'BRIMSTONE BASALT' : 'ABYSSAL OBSIDIAN';
   const sc = depthMeters < 36 ? '#d97236' : depthMeters < 86 ? '#fde047' : depthMeters < 141 ? '#c084fc' : '#38bdf8';
   hudPanel(ctx, 18, 22, 162, 56, sc);

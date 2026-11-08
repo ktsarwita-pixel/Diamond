@@ -42,13 +42,14 @@ try {
   await page.waitForFunction(() => document.querySelector('.cinematic-top')?.textContent?.includes('01 /'));
 
   const report = await page.evaluate(async () => {
-    const { CUTSCENE, prepareScene } = await import('/src/game/cutscene.ts');
+    const { CUTSCENE, prepareScene, promiseBeatAt, promiseContact } = await import('/src/game/cutscene.ts');
     const { scientistDepartureAt, disposalPoseAt } = await import('/src/game/cutscene.ts');
     const { DISPOSAL_DURATION, disposalJob, disposalCameraAt } = await import('/src/game/sceneDisposal.ts');
     const { calderaWalkerAt, calderaJob, riftGeometry, riftCameraAt } = await import('/src/game/sceneCaldera.ts');
     const { polygon, resolvePixelFrame, rockTextureGen } = await import('/src/game/pixelCraft.ts');
     const { drawBuilding } = await import('/src/game/outpostArt.ts');
-    const { drawWorldHuman, cinematicHuman } = await import('/src/game/cineHumans.ts');
+    const { drawWorldHuman, cinematicHuman, cinematicReachPoint } = await import('/src/game/cineHumans.ts');
+    const { faultFlightAt } = await import('/src/game/cubeFlight.ts');
     const { CHARACTERS } = await import('/src/game/characters.ts');
     const { GameEngine } = await import('/src/game/engine.ts');
     const { heroRobot } = await import('/src/game/cutsceneArt.ts');
@@ -176,6 +177,43 @@ try {
       hurtAnimates: rigAt(0.2, true) !== rigAt(0.5, true),
       cycleHasThreeStates: new Set([awake, asleep, waking]).size === 3,
       wakeShowsIcon: waking !== asleep && waking !== awake,
+    };
+    const promiseSamples = Array.from({ length: 193 }, (_, i) => promiseBeatAt(i * 0.05));
+    const offerCore = cinematicReachPoint({
+      x: 423, y: 268, s: 2.15, t: 0, look: CHARACTERS.mara.look, pose: 'reach', reachProgress: 1, facing: 1,
+    }).core;
+    const gripper = [promiseContact.cubeX - 19 * 3.5, 268 - 15 * 3.5 + (promiseContact.serviceArmY + 1.5) * 3.5];
+    const promiseScene = {
+      contactGap: Math.hypot(offerCore[0] - gripper[0], offerCore[1] - gripper[1]),
+      continuity: promiseSamples[0].maraX === 396 && promiseSamples[0].cubeX === 548 && promiseSamples[0].gusX === 344 && promiseSamples[0].ilseX === 452,
+      singleOwner: promiseSamples.every((p, i) => p.accepted === (i * 0.05 >= 3.6)),
+      seatMonotonic: promiseSamples.every((p, i) => i === 0 || p.seat >= promiseSamples[i - 1].seat),
+      chargeMonotonic: promiseSamples.every((p, i) => i === 0 || p.charge >= promiseSamples[i - 1].charge),
+      readyOnlyAfterCharge: promiseSamples.every(p => p.ready === 0 || p.charge > 0.99),
+      phases: [...new Set(promiseSamples.map(p => p.phase))].join(','),
+    };
+    const flightRig = (time, lowHull, groundY) => {
+      g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, 640, 360);
+      drawCubeMiner(g, { x: 120, y: 200, facing: 'right', aimAngle: 0.2, drillSpin: 0, drillExtend: 0, thrustPower: 1, isDrilling: false,
+        drillTier: 1, armorTier: 1, thrusterTier: 1, cargoFill: 0, treadPhase: 0, bob: 0, squashX: 1, squashY: 1, time, invuln: false,
+        tint: null, godMode: false, idleTime: 0, combo: 0, lowHull, lowFuel: false, cargoFull: false, scale: 3, groundY });
+      return digest();
+    };
+    c.width = 640; c.height = 360;
+    const healthyFlight = flightRig(2.2, false);
+    const hurtFlight = flightRig(2.2, true);
+    const flightFault = [];
+    for (let i = 0; i <= 80; i++) for (const power of [0.2, 1]) flightFault.push(faultFlightAt(i * 0.05, power));
+    const lowHullFlight = {
+      healthyVsHurt: healthyFlight !== hurtFlight,
+      animates: hurtFlight !== flightRig(2.75, true),
+      groundedUntouched: flightRig(2.2, false, 280) === flightRig(2.2, true, 280),
+      jetsBounded: flightFault.every(f => f.left >= 0 && f.right >= 0 && f.left <= 1.001 && f.right <= 1.001),
+      misfire: Math.min(...flightFault.map(f => Math.min(f.left, f.right))) < 0.12,
+      asymmetric: Math.max(...flightFault.map(f => Math.abs(f.asym))) > 0.35,
+      hullRoll: Math.max(...flightFault.map(f => Math.abs(f.roll))) > 0.03,
+      smoke: Math.max(...flightFault.map(f => f.smoke)) > 0.8,
+      sparks: flightFault.some(f => f.spark),
     };
     // Regression: a powered-down auger must sag DOWN on the correct side for
     // every aim quadrant, including left/up inputs and the old sleepy left rest.
@@ -323,9 +361,18 @@ try {
     // A disconnected rock island is a stronger failure than complete contours alone.
     const renderedRockComponents = islands(calderaJob.get().geology, 1);
     const renderedLedgeComponents = islands(calderaJob.get().ledge, 1);
+    const riftArrival = Array.from({ length: 361 }, (_, i) => calderaWalkerAt(i * 0.05));
+    const portal = riftGeometry.portal;
+    const riftStory = {
+      startsInAdit: riftArrival[0].x > portal.opening.x && riftArrival[0].x < portal.opening.x + portal.opening.w,
+      deckMeetsMouth: Math.abs(riftArrival[0].deck - (portal.opening.y + portal.opening.h)) < 6,
+      monotonic: riftArrival.every((p, i) => i === 0 || p.x >= riftArrival[i - 1].x),
+      supported: riftArrival.every(p => p.supported),
+      scanThenAdvance: riftArrival.find(p => p.x >= 420).x < riftArrival[riftArrival.length - 1].x,
+    };
     return {
       sceneResults, buildings, humans, opened, moved, connectivity, liteScenes, scene3Grounding,
-      calderaSupport, idleRobotFrames, lowHullIdle, lowHullDrill,
+      calderaSupport, idleRobotFrames, lowHullIdle, lowHullDrill, lowHullFlight, promiseScene, riftStory,
       groundContact: {
         samples: treadContacts.length, deepest: Math.max(...treadContacts) - floor,
         largestGap: floor - Math.min(...treadContacts), largestTrackTilt: Math.max(...treadAngles),
@@ -350,6 +397,11 @@ try {
   for (const rock of report.boulderSupport) assert.ok(rock.seated && rock.embed >= 0 && rock.embed <= 1.1, 'A boulder floats above its bench');
   assert.equal(report.renderedRockComponents, 1, 'Detached rock or mineral pixels in the final cliff layer');
   assert.equal(report.renderedLedgeComponents, 1, 'Detached rock fragments beside the walking ledge');
+  assert.ok(report.promiseScene.contactGap < 0.75, `Cell misses CUBE's gripper by ${report.promiseScene.contactGap}px`);
+  assert.ok(report.promiseScene.continuity && report.promiseScene.singleOwner && report.promiseScene.seatMonotonic && report.promiseScene.chargeMonotonic && report.promiseScene.readyOnlyAfterCharge, `Promise staging/ownership/power order is broken: ${JSON.stringify(report.promiseScene)}`);
+  assert.equal(report.promiseScene.phases, 'approach,offer,transfer,accept,home');
+  for (const [key, value] of Object.entries(report.lowHullFlight)) assert.ok(value, `Low-hull flight check failed: ${key}`);
+  for (const [key, value] of Object.entries(report.riftStory)) assert.ok(value, `Rift arrival check failed: ${key}`);
   assert.ok(report.disposalBuilt && report.disposalContinuity < 0.01, `Disposal shot fails to load or jumps at release: ${JSON.stringify({ built: report.disposalBuilt, gap: report.disposalContinuity })}`);
   for (const f of report.disposalFraming) assert.ok(f.x > 45 && f.x < 595 && f.y > 35 && f.y < 325, `Falling CUBE-07 leaves the disposal frame at ${f.t}s: ${JSON.stringify(f)}`);
   assert.ok(report.disposalSky && report.disposalSky.width >= 1280 && report.disposalSky.height >= 960, 'Disposal fall exposes uncovered sky');
@@ -400,7 +452,7 @@ try {
     await mobile.close();
   }
   assert.deepEqual(errors, [], 'No browser runtime errors are allowed');
-  console.log(`PASS: disposal contact/pivot/release, tram boarding, supported connected rocks, ${report.groundContact.samples} planted low-health poses, all 12 HD/Lite scenes, buildings, interactions, controls, and mobile layouts.`);
+  console.log(`PASS: promise cell handoff/ownership, rift adit arrival, low-hull flight misfires, disposal contact/pivot/release, tram boarding, supported connected rocks, ${report.groundContact.samples} planted low-health poses, all 12 HD/Lite scenes, buildings, interactions, controls, and mobile layouts.`);
 } finally {
   await browser.close();
 }

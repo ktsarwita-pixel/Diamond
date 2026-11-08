@@ -44,11 +44,15 @@ const CUES: Record<string, Array<{ at: number; play: () => void }>> = {
     { at: 8.8, play: () => sound.playUpgrade() },
   ],
   survivors: [{ at: 4.7, play: () => sound.playOreCollect(120) }],
-  'the-deal': [{ at: 3, play: () => sound.playUpgrade() }],
+  'the-deal': [
+    { at: 3.6, play: () => sound.playUpgrade() },
+    { at: 5.35, play: () => sound.playOreCollect(90) },
+  ],
   'first-shift': [{ at: 0.7, play: () => sound.playWhoosh(1.0) }],
   'sulfured-caves': [
     { at: 2.6, play: () => sound.playWhoosh(0.5) },
     { at: 11.4, play: () => sound.playOreCollect(90) },
+    { at: 14.6, play: () => sound.playUpgrade() },
   ],
 };
 

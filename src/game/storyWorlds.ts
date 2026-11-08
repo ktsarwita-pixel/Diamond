@@ -258,7 +258,7 @@ function drawIndustrial(ctx: CanvasRenderingContext2D, kind: IndustrialKind, pan
   }
 }
 
-export function drawStorySet(ctx: CanvasRenderingContext2D, kind: StorySet, pan: number, t: number) {
+export function drawStorySet(ctx: CanvasRenderingContext2D, kind: StorySet, pan: number, t: number, habitatDoor?: number) {
   pan = clamp(pan, 0, 80);
   if (kind === 'aether' || kind === 'new-aether' || kind === 'exile') {
     drawSky(ctx, t, pan);
@@ -319,7 +319,7 @@ export function drawStorySet(ctx: CanvasRenderingContext2D, kind: StorySet, pan:
     ctx.globalAlpha = 1;
     drawBuilding(ctx, 'refinery', 26, 268, t, { id: 'story-refinery', lite: isLite() });
     drawBuilding(ctx, 'repair', 424, 268, t, { id: 'story-repair', lite: isLite() });
-    drawBuilding(ctx, 'habitat', 243, 268, t, { id: 'story-habitat', door: smooth(0.5, 1.65, t), lite: isLite() });
+    drawBuilding(ctx, 'habitat', 243, 268, t, { id: 'story-habitat', door: habitatDoor ?? smooth(0.5, 1.65, t), lite: isLite() });
     drawBuilding(ctx, 'forge', 560, 268, t, { id: 'story-forge', lite: isLite() });
     // A hand-sewn flag on a pole planted in the bunker's sandbags.
     px(ctx, 382, 200, 3, 52, '#0b0f16');
