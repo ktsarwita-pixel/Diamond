@@ -7,7 +7,9 @@ export const CALDERA_W = 1920;
 export const CALDERA_H = 960;
 export const CALDERA_DURATION = 18;
 const W = CALDERA_W, H = CALDERA_H, SEA = 754;
-const CORE: Point = [1430, 485];
+const CORE: Point = [1476, 430];
+const HEART_BASE = 610;
+const HEART_HEIGHT = 336;
 const finish = (x: number) => { const t = clamp(x); return t * t * t * (10 + t * (-15 + t * 6)); };
 const n = makeNoise(124612);
 
@@ -100,10 +102,12 @@ export function calderaWalkerAt(t: number) {
 export function riftCameraAt(t: number) {
   const follow = finish((t - 0.4) / 6.3);
   const reveal = finish((t - 5.2) / 9.4);
+  // After the wide cavern reveal, ease into a closer awe shot of the Heart.
+  const awe = finish((t - 10.8) / 6.4);
   return {
-    x: lerp(lerp(391, 629, follow), 970, reveal),
-    y: lerp(lerp(540, 538, follow), 471, reveal),
-    zoom: lerp(lerp(1.16, 0.86, follow), 0.39, reveal),
+    x: lerp(lerp(lerp(391, 629, follow), 970, reveal), 1128, awe),
+    y: lerp(lerp(lerp(540, 538, follow), 471, reveal), 452, awe),
+    zoom: lerp(lerp(lerp(1.16, 0.86, follow), 0.39, reveal), 0.5, awe),
   };
 }
 
@@ -186,29 +190,40 @@ export const calderaJob = new Job(function* (): Generator<unknown, RiftLayers, u
     pixelLine(g, [x + 22, lipY - 3], [x + 81, lipY], '#c0b471', 2);
     if (slice.due()) yield;
   }
+  // Talus sits behind the mineral shelf so boulders never occlude the Heart.
+  for (const s of TALUS) yield* rockTextureGen(g, s.points, '#34423a', '#8d9277', Math.round(s.x));
   const bed: Point[] = [[1330, 593], [1362, 571], [1402, 568], [1440, 550], [1489, 553],
     [1531, 535], [1584, 546], [1607, 568], [1554, 596], [1450, 630], [1352, 623]];
   yield* rockTextureGen(g, bed, '#616344', '#cab776', 117);
-  // Amber crystals grow out of a sloping mineral shelf embedded in the host wall.
-  for (let row = 0; row < 3; row++) {
-    const count = 13 - row * 2;
+  // The Heart of Sulfur is a wall-rooted megacluster, not a small shelf prop.
+  // Its root mound overlaps the bed and host wall so the geology stays connected.
+  const heartRoot: Point[] = [[1352, 614], [1388, 584], [1432, 566], [1478, 556],
+    [1532, 548], [1586, 556], [1618, 578], [1604, 612], [1548, 634], [1462, 642], [1388, 632]];
+  yield* rockTextureGen(g, heartRoot, '#6b6747', '#d6c481', 118);
+  crystal(g, 1476, HEART_BASE, HEART_HEIGHT, 88, -6, '#ead896');
+  crystal(g, 1402, 614, 238, 58, -20, '#d5c57c');
+  crystal(g, 1548, 602, 276, 64, 16, '#e2ce88');
+  crystal(g, 1596, 588, 184, 42, 26, '#cabb75');
+  crystal(g, 1368, 618, 150, 36, -30, '#bcb060');
+  for (let row = 0; row < 2; row++) {
+    const count = 9 - row * 2;
     for (let i = 0; i < count; i++) {
-      const x = 1360 + i * (220 / count) + hash(i * 7 + row) * 9;
-      const base = 602 - (x - 1360) * 0.22 + row * 4;
-      const h = 20 + hash(i * 3.1 + row * 41) * (65 + row * 28);
-      crystal(g, x, base, h, 9 + hash(i + row * 5) * 16, (x - 1460) * 0.11,
+      const x = 1372 + i * (230 / count) + hash(i * 7 + row) * 8;
+      const base = 618 - (x - 1476) * 0.08 + row * 5;
+      const h = 28 + hash(i * 3.1 + row * 41) * (58 + row * 22);
+      crystal(g, x, base, h, 10 + hash(i + row * 5) * 18, (x - 1476) * 0.1,
         ['#bcb060', '#d5c57c', '#96a161', '#e2ce88'][(i + row) % 4]);
     }
     yield;
   }
-  crystal(g, 1468, 589, 151, 38, -5, '#e5d292');
-  crystal(g, 1510, 578, 116, 29, 13, '#cabb75');
-  const seam: Point[] = [[1599, 274], [1548, 338], [1560, 370], [1490, 418], [1480, 456], [1444, 488], [1434, 540]];
+  // A bright inner facet makes the central crystal read as a glowing heart.
+  pixelLine(g, [1476, HEART_BASE - 18], [1470, HEART_BASE - HEART_HEIGHT + 26], '#fff2c2', 2);
+  pixelLine(g, [1458, HEART_BASE - 40], [1466, HEART_BASE - HEART_HEIGHT + 60], '#f7e6a8');
+  const seam: Point[] = [[1604, 250], [1560, 320], [1548, 372], [1500, 430], [1488, 500], [1476, HEART_BASE]];
   for (let i = 1; i < seam.length; i++) {
     pixelLine(g, seam[i - 1], seam[i], '#182d2c', 5);
     pixelLine(g, [seam[i - 1][0] + 1, seam[i - 1][1]], [seam[i][0] + 1, seam[i][1]], '#c8ad61', 2);
   }
-  for (const s of TALUS) yield* rockTextureGen(g, s.points, '#34423a', '#8d9277', Math.round(s.x));
   // Water runs in connected grooves before dropping over the cliff lips.
   const channels: Point[][] = [
     [[1666, 526], [1620, 543], [1569, 550], [1467, 585], [1400, 601], [1332, 616], [1261, 626], [1222, 630]],
@@ -245,9 +260,9 @@ export const calderaJob = new Job(function* (): Generator<unknown, RiftLayers, u
   yield* rockTextureGen(f, [[1623, 1024], [1660, 932], [1706, 907], [1748, 839],
     [1791, 831], [1854, 752], [1910, 728], [1984, 700], [1984, 1024]], '#091e26', '#49685b', 159);
 
-  const [reflection, r] = makeCanvas(720, 160);
-  r.translate(0, 160); r.scale(1, -1); r.globalAlpha = 0.36;
-  r.drawImage(geology, 1050, 420, 720, 334, 0, 0, 720, 160);
+  const [reflection, r] = makeCanvas(720, 220);
+  r.translate(0, 220); r.scale(1, -1); r.globalAlpha = 0.36;
+  r.drawImage(geology, 1050, 240, 720, 514, 0, 0, 720, 220);
   const [mist, mg] = makeCanvas(128, 32);
   for (let y = 0; y < 32; y++) for (let x = 0; x < 128; x++) {
     const q = ((x - 64) / 64) ** 2 + ((y - 16) / 16) ** 2;
@@ -264,7 +279,7 @@ const WATER_RAMP = Array.from({ length: 124 }, (_, y) => mix('#577d65', '#0b2c39
 function water(ctx: CanvasRenderingContext2D, t: number, layers: RiftLayers) {
   for (let y = SEA; y < H; y += 2) px(ctx, 0, y, W, 2, WATER_RAMP[Math.min(123, Math.floor((y - SEA) * 0.6))]);
   ctx.save(); ctx.globalAlpha = 0.46;
-  for (let y = 0; y < 150; y += isLite() ? 8 : 4) {
+  for (let y = 0; y < 200; y += isLite() ? 8 : 4) {
     const off = Math.sin(t * 1.2 + y * 0.22) * (1 + y * 0.032);
     ctx.drawImage(layers.reflection, 0, y, 720, 3, 1050 + off, SEA + y, 720, 3);
   }
@@ -280,6 +295,13 @@ function water(ctx: CanvasRenderingContext2D, t: number, layers: RiftLayers) {
   for (let i = 0; i < 26; i++) {
     const x = 1100 + hash(i) * 600, y = SEA + 3 + hash(i * 3.3) * 9;
     if (Math.sin(t * 1.7 + i) > 0.56) px(ctx, x, y, 3 + i % 4, 1, '#e0dfb3');
+  }
+  // Broken golden reflection directly beneath the Heart.
+  for (let i = 0; i < 18; i++) {
+    const a = (1 - i / 18) * (0.16 + 0.05 * Math.sin(t * 1.3 + i));
+    ctx.save(); ctx.globalAlpha = Math.max(0, a);
+    px(ctx, CORE[0] - 14 + Math.sin(t * 1.1 + i * 0.7) * (4 + i), SEA + 8 + i * 8, 28 - i, 1, '#e6d9a0');
+    ctx.restore();
   }
 }
 
@@ -332,9 +354,35 @@ export function drawCalderaScene(ctx: CanvasRenderingContext2D, t: number) {
   ctx.drawImage(layers.distant, 0, 0);
   water(ctx, t, layers);
   ctx.drawImage(layers.geology, 0, 0);
-  pixelGlow(ctx, CORE[0], CORE[1] + 55, 200, '#d3bc69', 0.17);
-  pixelGlow(ctx, CORE[0], CORE[1] + 72, 100, '#e5ce83', 0.28 + Math.sin(t * 1.4) * 0.035);
-  pixelGlow(ctx, 1470, 515, 42, '#f0dc96', 0.3);
+  const reveal = finish((t - 5.2) / 9.4);
+  const pulse = 0.5 + 0.5 * Math.sin(t * 1.15);
+  pixelGlow(ctx, CORE[0], CORE[1] + 90, 360, '#d3bc69', 0.14 + reveal * 0.08);
+  pixelGlow(ctx, CORE[0], CORE[1] + 40, 190, '#e5ce83', 0.24 + pulse * 0.07);
+  pixelGlow(ctx, CORE[0], CORE[1] - 60, 96, '#f4e2a0', 0.26 + pulse * 0.1);
+  // Slow volumetric shafts and rising sulfur embers sell the scale of the Heart.
+  if (!isLite()) {
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 4; i++) {
+      const a = -2.35 + i * 0.34 + Math.sin(t * 0.22 + i) * 0.025;
+      const len = 460 + i * 40, spread = 0.05 + i * 0.012;
+      ctx.globalAlpha = reveal * (0.035 + 0.015 * Math.sin(t * 0.7 + i));
+      polygon(ctx, [[CORE[0], CORE[1] + 20],
+        [CORE[0] + Math.cos(a - spread) * len, CORE[1] + 20 + Math.sin(a - spread) * len],
+        [CORE[0] + Math.cos(a + spread) * len, CORE[1] + 20 + Math.sin(a + spread) * len]], '#e8d79a');
+    }
+    ctx.restore();
+  }
+  for (let i = 0; i < qn(28, 0.4); i++) {
+    const age = (t * 0.16 + hash(i * 3.7)) % 1;
+    const x = CORE[0] + (hash(i) - 0.5) * 280 + Math.sin(t * 0.9 + i) * 9;
+    const y = CORE[1] + 150 - age * 330;
+    ctx.save(); ctx.globalAlpha = (1 - age) * (0.2 + reveal * 0.35);
+    px(ctx, x, y, i % 5 === 0 ? 2 : 1, i % 5 === 0 ? 2 : 1, '#f5e6b0');
+    ctx.restore();
+  }
+  for (const [vx, vy, ph] of [[1488, 500, 0], [1500, 430, 1.4], [1548, 372, 2.8]]) {
+    pixelGlow(ctx, vx, vy, 26, '#e9d68f', 0.1 + 0.12 * Math.max(0, Math.sin(t * 1.15 + ph)));
+  }
   for (let i = 0; i < CASCADES.length; i++) {
     const f = CASCADES[i];
     if (f.x >= cam.x - halfWidth - 60 && f.x <= cam.x + halfWidth + 60) cascade(ctx, f, t, i + 2, layers.mist);

@@ -34,6 +34,7 @@ import type { Job } from './cineKit';
 import { drawStorySet, prepareStorySet, storyAtmosphere, storySetJobs, type StorySet } from './storyWorlds';
 import { drawWorkshopScene, workshopJob } from './sceneWorkshop';
 import { HABITAT_OPENING } from './outpostArt';
+import { polygon } from './pixelCraft';
 import { DEPARTURE_DURATION, drawScientistDeparture } from './sceneDeparture';
 export { scientistDepartureAt } from './sceneDeparture';
 import { DISPOSAL_DURATION, disposalJob, drawDisposalScene } from './sceneDisposal';
@@ -385,64 +386,83 @@ export const CUTSCENE: CutsceneScene[] = [
       const doorC = doorL + doorW / 2;
       const sill = 268;
       const doorway = { left: doorL, top: sill + HABITAT_OPENING.top, width: doorW, height: HABITAT_OPENING.height, sill, gloom: '#0d0a08' };
-      // Emergence timeline for one walker: `tt` seconds since it was cued.
-      //   0.00–0.55  rising out of the interior (k 0→1), at the door centre
-      //   0.55+      walking from the threshold to `target`
-      const EMERGE = 0.55;
-      const walker = (tt: number, target: number, speed: number) => {
-        const k = clamp(tt / EMERGE);
-        const walk = clamp((tt - EMERGE) / speed);
-        const x = k < 1 ? doorC : doorC + (target - doorC) * easeInOut(walk);
-        return { k, walk, x, inside: k < 1 };
+      // Warm interior light spills onto the deck as the vault opens.
+      const doorOpen = easeInOut(clamp((t - 0.5) / 1.15));
+      ctx.save(); ctx.globalAlpha = doorOpen * 0.16;
+      polygon(ctx, [[doorL + 2, sill], [doorL + doorW - 2, sill],
+        [doorL + doorW + 26, sill + 16], [doorL - 18, sill + 16]], '#ffce85');
+      ctx.restore();
+      // Staged entry: fade up from the gloom, pause at the threshold, then fan out.
+      // A small lane offset keeps the single-file doorway from looking like clones.
+      const walker = (tt: number, target: number, speed: number, lane = 0) => {
+        const reveal = clamp(tt / 0.7);
+        const k = tt < 0.7 ? easeInOut(reveal) * 0.94
+          : tt < 0.88 ? 0.94 + 0.06 * easeInOut(clamp((tt - 0.7) / 0.18)) : 1;
+        const walk = clamp((tt - 0.88) / speed);
+        const x = doorC + lane * (1 - k) + (target - doorC) * easeInOut(walk);
+        return { k, walk, x, inside: k < 1, moving: tt > 0.88 && walk < 1 };
       };
-      if (t > 3.0) {
-        // Survivors stream out behind the main cast (atmospheric depth)
+      const dust = (x: number, tt: number, dir: number, alpha = 0.16) => {
+        const age = (tt * 2.2) % 1;
+        ctx.save(); ctx.globalAlpha = (1 - age) * alpha;
+        R(ctx, x - dir * age * 10 - 2, sill + 1, 4, 2, '#c9b48e');
+        R(ctx, x - dir * age * 6 + 2, sill + 2, 3, 1, '#a89474');
+        ctx.restore();
+      };
+      if (t > 3.25) {
+        // Background survivors fan out to the flanks, leaving the centre clear for the cast.
         for (let i = 0; i < 6; i++) {
-          const tt = t - 3.0 - i * 0.32;
+          const tt = t - 3.25 - i * 0.36;
           if (tt <= 0) continue;
-          const target = i % 2 ? 205 - i * 13 : 390 + i * 16;
-          const w = walker(tt, target, 1.6);
+          const target = i < 3 ? 150 + i * 26 : 470 + (i - 3) * 24;
+          const dir: 1 | -1 = target > doorC ? 1 : -1;
+          const w = walker(tt, target, 1.5, (i % 3 - 1) * 4);
+          if (w.moving) dust(w.x, tt + i, dir, 0.1);
           humanThroughDoorway(ctx, { ...doorway, k: w.inside ? w.k : 1 + w.walk }, {
             x: w.x,
             y: sill,
-            s: 1.5,
+            s: 1.45,
             t: t + i * 0.7,
             look: crowdLook(i),
-            pose: w.inside || w.walk < 1 ? 'walk' : i === 2 ? 'wave' : i === 4 ? 'point' : 'idle',
+            pose: w.inside || w.walk < 1 ? 'walk' : t > 4.8 && i % 2 ? 'cheer' : i === 1 ? 'wave' : i === 4 ? 'point' : 'idle',
             walkPhase: tt * 4.2 + i,
-            facing: target > doorC ? 1 : -1,
-            dim: 0.32,
+            facing: w.walk < 0.98 ? dir : 1,
+            dim: 0.38,
             rim: '#ffce85',
-            lampOn: true,
+            lampOn: i % 2 === 0,
           });
         }
       }
 
-      const cast: Array<{ id: 'gus' | 'mara' | 'ilse' | 'pip'; target: number; direction: 1 | -1 }> = [
-        { id: 'gus', target: 378, direction: 1 },
-        { id: 'mara', target: 416, direction: 1 },
-        { id: 'ilse', target: 462, direction: 1 },
-        { id: 'pip', target: 252, direction: -1 },
+      // Pip scouts first, then the adults follow with room to read each silhouette.
+      const cast: Array<{ id: 'gus' | 'mara' | 'ilse' | 'pip'; start: number; target: number; direction: 1 | -1; s: number; lane: number; walkDur: number }> = [
+        { id: 'pip', start: 1.72, target: 236, direction: -1, s: 1.8, lane: -4, walkDur: 1.1 },
+        { id: 'gus', start: 2.05, target: 344, direction: 1, s: 2.15, lane: 3, walkDur: 1.25 },
+        { id: 'mara', start: 2.42, target: 396, direction: 1, s: 2.15, lane: -2, walkDur: 1.3 },
+        { id: 'ilse', start: 2.8, target: 452, direction: 1, s: 2.1, lane: 4, walkDur: 1.35 },
       ];
       cast.forEach((person, i) => {
-        // Door finishes opening at t≈1.65; the first person starts emerging just after.
-        const tt = t - 1.7 - i * 0.48;
+        const tt = t - person.start;
         if (tt <= 0) return;
-        const w = walker(tt, person.target, 1.45);
+        const w = walker(tt, person.target, person.walkDur, person.lane);
+        if (w.moving) dust(w.x, tt + i * 0.4, person.direction);
         humanThroughDoorway(ctx, { ...doorway, k: w.inside ? w.k : 1 + w.walk }, {
           x: w.x,
           y: sill,
-          s: person.id === 'pip' ? 2.0 : 2.4,
+          s: person.s,
           rim: '#ffd9a0',
           lampOn: true,
           t: t + i * 0.26,
           look: human(person.id),
-          pose: w.inside || w.walk < 1 ? 'walk' : person.id === 'pip' ? 'wave' : 'idle',
+          pose: w.inside || w.walk < 1 ? 'walk' : person.id === 'pip' ? 'wave' : person.id === 'ilse' && t > 4.4 ? 'wave' : 'idle',
           walkPhase: tt * 4.5,
-          facing: person.direction,
+          facing: w.walk < 0.98 ? person.direction : 1,
           talking: person.id === 'ilse' && t > 4.2 && t < 6.4,
           flipProp: person.id === 'gus' ? 'wrench' : person.id === 'ilse' ? 'lantern' : null,
         });
+        if (person.id === 'ilse' && !w.inside) {
+          glowAt(ctx, w.x + 10, sill - 28, 20, '#ffd9a0', 0.1 + 0.03 * Math.sin(t * 3 + i));
+        }
       });
 
       heroRobot(ctx, {

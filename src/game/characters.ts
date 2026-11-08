@@ -431,13 +431,16 @@ export function drawCubeMiner(ctx: CanvasRenderingContext2D, p: CubeDrawParams) 
   const idle = p.idleTime ?? 0;
   const idling = idle > 1.2 && !p.isDrilling && p.thrustPower < 0.1;
   const sleeping = idle > 9 && !p.lowHull;
+  const idleAct = idling && !p.lowHull && !sleeping;
+  const idleCycle = idle % 10;
   const dmg = p.damaged ?? 0;
   const power = p.power ?? 1;
   const powered = power > 0.05 && (power >= 1 || Math.sin(p.time * 31) > 1 - power * 2);
 
   // Breathing — the chassis gently expands while idle, slower when asleep.
   const hurt = !!p.lowHull && !p.godMode;
-  const breathe = idling && !hurt ? Math.sin(p.time * (sleeping ? 1.25 : 2.4)) * (sleeping ? 0.05 : 0.028) : 0;
+  const breathe = idling && !hurt ? Math.sin(p.time * (sleeping ? 1.25 : 2.4)) * (sleeping ? 0.05 : 0.028)
+    + (idleAct ? Math.sin(p.time * 0.61) * 0.012 : 0) : 0;
 
   // ---- Low-hull idle: a repeating sleep / wake / DANGER cycle ----
   // Every ~8.4 s the damaged rig gives out, sleeps, then jolts awake with a
@@ -469,7 +472,10 @@ export function drawCubeMiner(ctx: CanvasRenderingContext2D, p: CubeDrawParams) 
   // Micro-vibration while the drill bites into rock
   const vib = p.isDrilling ? Math.round(Math.sin(p.time * 62) * 1.2) : 0;
   const list = stressed ? -0.07 - hurtHeave * 0.02 - (hurtAsleep ? 0.05 : 0) : 0;
-  const angle = (p.rotation ?? 0) + list;
+  // Healthy idle weight shift: a slow lean from one tread to the other, then back.
+  const healthyList = idleAct && idleCycle > 5.5 && idleCycle < 7
+    ? Math.sin(((idleCycle - 5.5) / 1.5) * Math.PI) * 0.035 : 0;
+  const angle = (p.rotation ?? 0) + list + healthyList;
   const sx = p.squashX * (1 - breathe * 0.6 - hurtSquash * 0.7);
   const sy = p.squashY * (1 + breathe + hurtSquash);
   const desiredY = p.y + p.bob * 0.6 + (sleeping ? 1 : 0) + vib * 0.4 + sag + Math.round(hurtHeave * 1.5) - jolt;
@@ -506,6 +512,21 @@ export function drawCubeMiner(ctx: CanvasRenderingContext2D, p: CubeDrawParams) 
         ctx.fillStyle = '#fb923c';
         ctx.fillRect(-7, 8, 1, 1);
       }
+    }
+  }
+
+  /* ---- Healthy idle exhaust: soft periodic puffs; asleep it breathes slower ---- */
+  if ((idleAct || sleeping) && !tint) {
+    const period = sleeping ? 7 : 5;
+    const k = (idle % period) / period;
+    if (k < (sleeping ? 0.2 : 0.3)) {
+      const q = k / (sleeping ? 0.2 : 0.3);
+      ctx.globalAlpha = (1 - q) * (sleeping ? 0.14 : 0.24);
+      ctx.fillStyle = '#9aa3a8';
+      ctx.fillRect(-8 - Math.round(q * 2), 7 - Math.round(q * 3), 1 + Math.round(q * 2), 1 + Math.round(q * 2));
+      ctx.fillStyle = '#c7ced2';
+      ctx.fillRect(-8 - Math.round(q * 2), 7 - Math.round(q * 3), 1, 1);
+      ctx.globalAlpha = 1;
     }
   }
 
@@ -673,6 +694,15 @@ export function drawCubeMiner(ctx: CanvasRenderingContext2D, p: CubeDrawParams) 
     // Curious look-around cycle
     eyeDx = Math.max(-1, Math.min(1, Math.round(Math.sin(idle * 0.9) * 1.4)));
     eyeDy = Math.sin(idle * 0.53) > 0.75 ? -1 : 0;
+    if (!hurt) {
+      // Healthier rigs get distinct glances and tiny saccades, not a metronome sweep.
+      const c = idle % 8;
+      eyeDx = c < 1.8 ? Math.round(Math.sin(idle * 1.1))
+        : c < 2.1 ? -1
+        : c < 4.6 ? Math.max(-1, Math.min(1, Math.round(Math.sin(idle * 0.7) * 1.4)))
+        : c < 4.9 ? 1 : Math.round(Math.sin(idle * 0.5) * 0.8);
+      eyeDy = c > 2.6 && c < 3.4 ? -1 : c > 6.2 && c < 6.8 ? 1 : 0;
+    }
   }
   if (p.eyeOverride) {
     eyeDx = p.eyeOverride.dx;
@@ -694,7 +724,7 @@ export function drawCubeMiner(ctx: CanvasRenderingContext2D, p: CubeDrawParams) 
   // Antenna — rigidly mounted to helmet boss at x=3, y=-11 with connected 2-segment whip
   const sway = Math.max(
     -1,
-    Math.min(1, Math.round(Math.sin(p.time * (idling ? 1.7 : 4.5) + 0.5) * (idling ? 1.1 : 0.45)))
+    Math.min(1, Math.round(Math.sin(p.time * (idling ? 1.7 : 4.5) + 0.5 + (idleAct ? Math.sin(p.time * 0.37) * 0.4 : 0)) * (idling ? 1.1 : 0.45)))
   );
   // Base collar fused into the helmet
   ctx.fillStyle = T('#08060e');
@@ -722,7 +752,7 @@ export function drawCubeMiner(ctx: CanvasRenderingContext2D, p: CubeDrawParams) 
   }
 
   if (powered) {
-    const blink = !sleeping && p.time % 3.6 < 0.11;
+    const blink = !sleeping && (p.time % 3.6 < 0.11 || (p.time % 9 > 5.1 && p.time % 9 < 5.23));
     let eyeColor = tint || (p.godMode ? '#fde047' : p.isDrilling ? '#ffd23f' : '#5cc9ff');
     if (p.combo && p.combo >= 5) eyeColor = '#ff6b2b'; // Blazing fire eyes during combo frenzy!
     if (p.cargoFull) eyeColor = '#fde047'; // Gold eyes on full cargo

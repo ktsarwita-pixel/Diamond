@@ -760,22 +760,27 @@ export function humanThroughDoorway(ctx: CanvasRenderingContext2D, d: DoorwayOpt
   const gloom = d.gloom ?? '#0b1016';
 
   // Depth is continuous now that scale is independent of the pose cache.
-  const depth = inside ? 1 - (1 - clamp(d.k)) * 0.28 : 1;
-  const recede = inside ? 1 - clamp(d.k) : 0;
+  // Figures stay slightly compressed while framed by the vault, then grow to
+  // full scale over the first steps outside so heads never pop through the lintel.
+  const k = clamp(d.k);
+  const depth = inside ? 0.7 + 0.24 * k : Math.min(1, 0.94 + (d.k - 1) * 0.6);
+  const recede = inside ? 1 - k : 0;
 
   ctx.save();
+  // Fade up out of the interior gloom instead of appearing on the first frame.
+  ctx.globalAlpha = inside ? clamp(d.k * 5) : 1;
   if (inside) {
     ctx.beginPath();
     ctx.rect(d.left, d.top, d.width, d.height);
     ctx.clip();
   }
   // Deeper in the room = higher on the floor plane and further up the wall.
-  const rise = recede * d.height * 0.14;
+  const rise = recede * d.height * 0.16;
   cinematicHuman(ctx, {
     ...o,
     s: (o.s ?? 3) * depth,
     y: d.sill - rise,
-    dim: Math.max(o.dim ?? 0, recede * 0.5),
+    dim: Math.max(o.dim ?? 0, recede * 0.55),
   });
   // Atmospheric veil: a gradient (not a flat box) so the gloom densest at the
   // back of the shelter and fully clear at the threshold the figure walks to.

@@ -681,16 +681,22 @@ export function heroRobot(ctx: CanvasRenderingContext2D, o: HeroRobotOpts) {
   const state = o.state ?? 'idle';
   const dmg = clamp(o.damage ?? 0);
   const power = o.power ?? 1;
-  const blink = state !== 'sleep' && t % 3.4 < 0.1;
+  const idleActive = state === 'idle' && power > 0.25;
+  const idleCycle = t % 12;
+  const glance = idleActive ? Math.sin(t * 0.42) * 1.15 : 0;
+  const saccade = idleActive && idleCycle > 5.2 && idleCycle < 5.42 ? Math.sin(t * 34) * 0.8 : 0;
+  const idleLid = idleActive && idleCycle > 8.6 && idleCycle < 8.88;
+  const blink = state !== 'sleep' && (t % 3.4 < 0.1 || (t % 11 > 4.4 && t % 11 < 4.52));
 
-  const idleSway = o.chassisMotion === false ? 0 : state === 'idle' ? Math.sin(t * 0.74) * 0.018 : 0;
+  const idleSway = o.chassisMotion === false || !idleActive ? 0 : Math.sin(t * 0.74) * 0.018 + Math.sin(t * 0.21) * 0.008;
   const bob = o.chassisMotion === false ? 0 :
-    state === 'idle' ? Math.sin(t * 1.55) * 0.23 + Math.sin(t * 0.69) * 0.1 :
+    idleActive ? Math.sin(t * 1.55) * 0.23 + Math.sin(t * 0.69) * 0.1 + Math.pow(Math.max(0, Math.sin(t * 0.31)), 4) * 0.12 :
     state === 'happy' ? Math.sin(t * 3) * 0.18 :
     state === 'crash' ? 0 : Math.sin(t * 1.4) * 0.1;
+  const idleShift = idleActive && o.chassisMotion !== false ? Math.sin(t * 0.23) * 0.35 : 0;
 
   ctx.save();
-  ctx.translate(o.x, o.y + bob);
+  ctx.translate(o.x + idleShift, o.y + bob);
   if (o.rot) ctx.rotate(o.rot);
   else if (idleSway) ctx.rotate(idleSway);
   ctx.scale((o.flip ? -1 : 1) * s, s);
@@ -862,12 +868,14 @@ export function heroRobot(ctx: CanvasRenderingContext2D, o: HeroRobotOpts) {
   /* --- back vents / exhaust --- */
   P(-13, 2, 2, 4, INK);
   P(-13, 3, 1, 2, '#39404c');
-  [-13].forEach(() => {
-    const puff = (t * 0.5) % 1;
-    ctx.globalAlpha = 0.3 * (1 - puff);
+  // Idle exhaust comes in soft periodic puffs; working states vent continuously.
+  const puff = idleActive ? (t % 4.2) / 4.2 : (t * 0.5) % 1;
+  const puffA = idleActive ? (puff < 0.4 ? 0.28 * (1 - puff / 0.4) : 0) : 0.3 * (1 - puff);
+  if (puffA > 0) {
+    ctx.globalAlpha = puffA;
     P(-15 - puff * 3, 3 - puff * 5, 3 + puff * 2, 2 + puff * 2, '#cbd5e1');
     ctx.globalAlpha = 1;
-  });
+  }
 
   /* --- head / visor --- */
   P(-6, -13, 12, 6, INK);
@@ -885,7 +893,7 @@ export function heroRobot(ctx: CanvasRenderingContext2D, o: HeroRobotOpts) {
 
   // Eyes
   const eye = o.eye ?? (state === 'sleep' ? 'closed' : state === 'happy' ? 'happy' : 'normal');
-  const ex = o.look ?? 0;
+  const ex = o.look ?? (idleActive ? clamp(glance + saccade, -1, 1) : 0);
   if (power > 0.02) {
     const eyeCol = lit('#5cc9ff');
     if (eye === 'closed' || (blink && eye === 'normal')) {
@@ -911,9 +919,10 @@ export function heroRobot(ctx: CanvasRenderingContext2D, o: HeroRobotOpts) {
       P(-2 + ex, -9, 2, 2, '#2a2f38');
       P(2 + ex, -8, 1, 1, '#3a4152');
     } else {
-      P(-2 + ex, -9, 2, 2, eyeCol);
-      P(2 + ex, -9, 1, 2, eyeCol);
-      P(-2 + ex, -9, 1, 1, '#ffffff');
+      const eh = idleLid ? 1 : 2, ey = -9 + (idleLid ? 1 : 0);
+      P(-2 + ex, ey, 2, eh, eyeCol);
+      P(2 + ex, ey, 1, eh, eyeCol);
+      P(-2 + ex, ey, 1, 1, '#ffffff');
     }
     if (eye !== 'dead') glowAt(ctx, -3, -8, 6, '#5cc9ff', 0.22 * power);
   }
@@ -921,7 +930,8 @@ export function heroRobot(ctx: CanvasRenderingContext2D, o: HeroRobotOpts) {
   // Antenna — a two-segment whip rigidly mounted on the helmet. It bends at the
   // base, so the tip can never drift away from the stem and look like it floats.
   const antennaIdle = state === 'idle' || state === 'sleep' || state === 'sad';
-  const swayAmt = Math.sin(t * (antennaIdle ? 1.7 : 5)) * 1.2 + dmg * 1.5;
+  let swayAmt = Math.sin(t * (antennaIdle ? 1.7 : 5)) * 1.2 + dmg * 1.5;
+  if (antennaIdle && t % 7 < 0.28) swayAmt += Math.sin((t % 7) / 0.28 * Math.PI) * 1.4;
   const antBaseX = 1;
   const antBaseY = -14; // helmet crown sits at -13, so the boss overlaps it
   const stemTopY = -18;
@@ -937,14 +947,16 @@ export function heroRobot(ctx: CanvasRenderingContext2D, o: HeroRobotOpts) {
   pixelLine(ctx, antBaseX, stemTopY, tipX, tipY, '#8b93a5');
   pixelLine(ctx, antBaseX, stemTopY, tipX, tipY, '#59606e', 1);
   // Beacon bulb
-  const beaconOn = power > 0.3 && Math.sin(t * (state === 'sleep' ? 1.4 : 3)) > -0.2;
+  const beaconPulse = 0.5 + 0.5 * Math.sin(t * (state === 'sleep' ? 1.4 : 3));
+  const beaconOn = power > 0.3 && beaconPulse > 0.35;
   P(tipX - 1, tipY - 1, 3, 3, INK);
   P(tipX, tipY, 1, 1, beaconOn ? '#ff5470' : '#5b2431');
-  if (beaconOn) glowAt(ctx, tipX, tipY, 4, '#ff5470', 0.4 * power);
+  if (beaconOn) glowAt(ctx, tipX, tipY, 4, '#ff5470', (0.2 + beaconPulse * 0.25) * power);
 
   /* --- drill arm --- */
   if (o.drill !== false) {
-    const ang = o.drillAngle ?? 0.55;
+    let ang = o.drillAngle ?? 0.55;
+    if (idleActive && o.drillAngle === undefined) ang += Math.sin(t * 0.55) * 0.02;
     const ext = clamp(o.drillExtend ?? 0.4);
     ctx.save();
     ctx.translate(9, -1);
