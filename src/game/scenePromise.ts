@@ -55,11 +55,15 @@ export function promiseBeatAt(t: number) {
 }
 
 function camera(ctx: CanvasRenderingContext2D, zoom: number, draw: () => void) {
-  // Keep the offered cell fixed while the world slowly pushes in around it.
-  const ox = (OFFER.core[0] - CW / 2) * (1 - zoom);
-  const oy = (OFFER.core[1] - CH / 2) * (1 - zoom);
+  // Center the actual hand-to-gripper contact, then push in slowly. The cell
+  // stays fixed on screen while the outpost slides gently behind the exchange.
+  // Blend from the establishing frame into a centered close-up. The blend keeps
+  // the visible world inside the outpost plate (no uncovered black edges).
+  const center = clamp((zoom - 1) / 0.7);
+  const tx = lerp(CW / 2, CW / 2 - (OFFER.core[0] - CW / 2) * zoom, center);
+  const ty = lerp(CH / 2, CH / 2 - (OFFER.core[1] - CH / 2) * zoom, center);
   ctx.save();
-  ctx.translate(CW / 2 + ox, CH / 2 + oy);
+  ctx.translate(tx, ty);
   ctx.scale(zoom, zoom);
   ctx.translate(-CW / 2, -CH / 2);
   draw();
@@ -76,7 +80,7 @@ function powerCell(ctx: CanvasRenderingContext2D, x: number, y: number, t: numbe
 
 export function drawPromiseScene(ctx: CanvasRenderingContext2D, t: number) {
   const b = promiseBeatAt(t);
-  camera(ctx, 1 + b.push * 0.5, () => {
+  camera(ctx, 1 + b.push * 0.7, () => {
     // Chapter 9 ended with the vault open and the crew on the deck. Do not reset
     // the door or teleport the cast back inside for the pact.
     drawStorySet(ctx, 'outpost', PAN, t, 1);
@@ -125,7 +129,7 @@ export function drawPromiseScene(ctx: CanvasRenderingContext2D, t: number) {
       x: b.cubeX, y: cubeY, s: CUBE_S, t, flip: true, chassisMotion: false,
       state: t > 5.2 ? 'happy' : 'idle',
       eye: t < 3.6 ? 'scan' : t > 5.2 ? 'happy' : 'normal',
-      look: 1, drill: true, drillAngle: lerp(2.35, 0.42, b.ready), drillExtend: 0.1,
+      look: 1, drill: true, drillAngle: lerp(Math.PI / 2, 0.42, b.ready), drillExtend: 0.05,
       drillSpin: b.ready > 0.9 ? t * 0.4 : 0,
       serviceArm: b.service, serviceArmY: SERVICE_Y, serviceGrip: b.grip,
       wheelPhase: (548 - b.cubeX) / (3 * CUBE_S), paintMix: 1, power: 1,

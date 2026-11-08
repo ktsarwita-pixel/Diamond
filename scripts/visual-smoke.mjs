@@ -198,6 +198,7 @@ try {
       noServiceHud: !promiseTexts.some(text => /CELL|ACCEPTED|POWER|SCAN|VIABLE|DEPOSIT/i.test(text)),
       noRemoteHatch: promiseSamples.every(p => !('portOpen' in p) && !('cellCharge' in p)),
       cellFollowsGripper: handoffGap < 0.01,
+      releaseContinuity: Math.hypot(promiseCellAt(3.599)[0] - promiseCellAt(3.6)[0], promiseCellAt(3.599)[1] - promiseCellAt(3.6)[1]) < 0.5,
       shortCarryOnly: Math.max(...promiseSamples.map((p, i) => promiseCellAt(i * 0.05)[0] - offerCore[0])) < 25,
       gripBeforeRelease: promiseSamples.every((p, i) => !p.accepted || p.grip > 0.99),
       contactGap: Math.hypot(offerCore[0] - gripper[0], offerCore[1] - gripper[1]),
@@ -426,7 +427,7 @@ try {
   assert.equal(report.renderedRockComponents, 1, 'Detached rock or mineral pixels in the final cliff layer');
   assert.equal(report.renderedLedgeComponents, 1, 'Detached rock fragments beside the walking ledge');
   assert.ok(report.promiseScene.contactGap < 0.75, `Cell misses CUBE's gripper by ${report.promiseScene.contactGap}px`);
-  assert.ok(report.promiseScene.noServiceHud && report.promiseScene.noRemoteHatch && report.promiseScene.cellFollowsGripper && report.promiseScene.shortCarryOnly && report.promiseScene.gripBeforeRelease, `Promise handoff is not a single visible cell held by the gripper: ${JSON.stringify(report.promiseScene)}`);
+  assert.ok(report.promiseScene.noServiceHud && report.promiseScene.noRemoteHatch && report.promiseScene.cellFollowsGripper && report.promiseScene.releaseContinuity && report.promiseScene.shortCarryOnly && report.promiseScene.gripBeforeRelease, `Promise handoff is not a single visible cell held by the gripper: ${JSON.stringify(report.promiseScene)}`);
   assert.ok(report.promiseScene.continuity && report.promiseScene.singleOwner && report.promiseScene.readyOnlyAfterCarry, `Promise staging/ownership order is broken: ${JSON.stringify(report.promiseScene)}`);
   assert.equal(report.promiseScene.phases, 'approach,offer,transfer,accept,home');
   for (const [key, value] of Object.entries(report.lowHullFlight)) assert.ok(value, `Low-hull flight check failed: ${key}`);

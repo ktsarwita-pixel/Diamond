@@ -844,11 +844,14 @@ export function heroRobot(ctx: CanvasRenderingContext2D, o: HeroRobotOpts) {
     const armLen = 3 + ext * 7;
     const ay = o.serviceArmY ?? 0;
     const grip = clamp(o.serviceGrip ?? 0);
+    // Two-link service arm; the wrist sits BEHIND the offered cell, while the
+    // jaws close on its top/bottom edges. No remote hatch or glowing slot.
     P(8, ay, armLen, 3, INK);
     P(8, ay + 1, armLen - 1, 1, '#94a3b8');
-    P(8 + armLen - 1, ay - 1, 3, 5, INK);
-    P(8 + armLen, ay - 1 + grip * 1.2, 2, 1, '#cbd5e1');
-    P(8 + armLen, ay + 3 - grip * 1.2, 2, 1, '#cbd5e1');
+    P(10, ay, 2, 3, '#59606e');
+    P(7 + armLen, ay - 1, 2, 5, INK);
+    P(8 + armLen, ay - 3 + grip * 1.0, 3, 1, '#cbd5e1');
+    P(8 + armLen, ay + 5 - grip * 1.0, 3, 1, '#cbd5e1');
   }
   // shoulder plate
   P(-10, -6, 4, 7, '#59606e');

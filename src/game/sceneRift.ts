@@ -228,6 +228,95 @@ const CASCADES: Cascade[] = [
   { x: 1214, y: 630, w: 17, bottom: SEA + 1 },
   { x: 1656, y: 368, w: 20, bottom: 526 },
 ];
+/** Scene-12 limestone: bedding planes, staggered joints, pitting and edge AO.
+ * This replaces the cloudy generic noise for the host rock only. */
+function* limestoneGen(
+  ctx: CanvasRenderingContext2D, points: readonly Point[], seed: number,
+  darkC: string, baseC: string, lightC: string,
+): Generator<void, void, unknown> {
+  const slice = sliceTimer();
+  const x0 = Math.max(0, Math.floor(Math.min(...points.map(p => p[0]))) - 2);
+  const x1 = Math.min(ctx.canvas.width, Math.ceil(Math.max(...points.map(p => p[0]))) + 3);
+  const y0 = Math.max(0, Math.floor(Math.min(...points.map(p => p[1]))) - 2);
+  const y1 = Math.min(ctx.canvas.height, Math.ceil(Math.max(...points.map(p => p[1]))) + 3);
+  const w = x1 - x0, h = y1 - y0;
+  if (w <= 0 || h <= 0) return;
+  const [, mctx] = makeCanvas(w, h);
+  mctx.translate(-x0, -y0); polygon(mctx, points, '#ffffff');
+  const mask = mctx.getImageData(0, 0, w, h).data;
+  const img = ctx.getImageData(x0, y0, w, h);
+  const d = img.data;
+  const dark = hex3(darkC), base = hex3(baseC), light = hex3(lightC);
+  const solid = (xx: number, yy: number) => xx >= 0 && yy >= 0 && xx < w && yy < h && mask[(yy * w + xx) * 4 + 3] > 0;
+  for (let yy = 0; yy < h; yy++) {
+    const y = y0 + yy;
+    for (let xx = 0; xx < w; xx++) {
+      const mi = (yy * w + xx) * 4;
+      if (mask[mi + 3] === 0) continue;
+      const x = x0 + xx;
+      const relief = n.fbm(x * 0.016 + seed, y * 0.018, 3);
+      const fine = n.noise(x * 0.11 + seed, y * 0.11) - 0.5;
+      const bed = Math.sin(y * 0.065 + n.noise(x * 0.006, y * 0.01 + seed) * 7);
+      // Broken bedding seams and irregular fractures, not a regular brick grid.
+      const bedSeam = Math.abs(bed) > 0.96 && n.noise(x * 0.018 + seed, y * 0.004) > 0.42 ? 0.18 : 0;
+      const fracture = Math.abs(n.noise(x * 0.025 + seed, y * 0.012) - 0.5) < 0.012 && n.noise(x * 0.005, y * 0.02) > 0.5 ? 0.16 : 0;
+      const pit = n.noise(x * 0.35 + seed, y * 0.35) > 0.84 ? 0.08 : 0;
+      let k = 0.34 + relief * 0.3 + bed * 0.05 + fine * 0.06 - bedSeam - fracture - pit;
+      // Edge ambient occlusion + a thin top light on broken faces.
+      if (!solid(xx - 3, yy) || !solid(xx + 3, yy) || !solid(xx, yy - 3) || !solid(xx, yy + 3)) k *= 0.72;
+      if (!solid(xx, yy - 3)) k += 0.1;
+      k = clamp(k);
+      const c = k < 0.5
+        ? [dark[0] + (base[0] - dark[0]) * k * 2, dark[1] + (base[1] - dark[1]) * k * 2, dark[2] + (base[2] - dark[2]) * k * 2]
+        : [base[0] + (light[0] - base[0]) * (k - 0.5) * 2, base[1] + (light[1] - base[1]) * (k - 0.5) * 2, base[2] + (light[2] - base[2]) * (k - 0.5) * 2];
+      d[mi] = c[0]; d[mi + 1] = c[1]; d[mi + 2] = c[2]; d[mi + 3] = 255;
+    }
+    if (slice.due()) { ctx.putImageData(img, x0, y0); yield; }
+  }
+  ctx.putImageData(img, x0, y0);
+}
+
+/** Rough-hewn, wet mine timber. Contours are irregular; grain/straps carry load. */
+function timberPost(ctx: CanvasRenderingContext2D, x: number, seed: number) {
+  polygon(ctx, [[x - 1, 135], [x + 12, 133], [x + 13, 215], [x, 217]], '#120d08');
+  polygon(ctx, [[x, 136], [x + 10, 134], [x + 11, 214], [x + 1, 215]], '#3b2c1e');
+  polygon(ctx, [[x + 1, 136], [x + 3, 135], [x + 3, 214], [x + 1, 215]], '#6b5136');
+  polygon(ctx, [[x + 8, 135], [x + 10, 134], [x + 11, 214], [x + 9, 214]], '#241a10');
+  ctxAlpha(ctx, 0.65, () => {
+    for (let i = 0; i < 4; i++) {
+      const gx = x + 3 + i * 2 + hash(seed + i) * 1.5;
+      pixelLine(ctx, [gx, 140 + hash(seed + i * 3) * 8], [gx + (hash(seed + i * 7) - 0.5) * 2, 208], i % 2 ? '#241a10' : '#5a422a', 1);
+    }
+  });
+  ellipse(ctx, x + 5 + hash(seed) * 2, 166 + hash(seed * 3) * 10, 1.6, 2.4, '#1a130d');
+  ellipse(ctx, x + 6, 192 + hash(seed * 5) * 8, 1.2, 1.8, '#241a10');
+  for (const y of [140, 206]) {
+    polygon(ctx, [[x - 1, y], [x + 12, y - 1], [x + 12, y + 3], [x - 1, y + 4]], '#181c22');
+    pixelLine(ctx, [x, y + 1], [x + 11, y], '#4b5563', 1);
+    px(ctx, x + 2, y + 1, 1, 1, '#9ca3af'); px(ctx, x + 9, y + 1, 1, 1, '#9ca3af');
+  }
+}
+function timberLintel(ctx: CanvasRenderingContext2D) {
+  polygon(ctx, [[102, 121], [238, 119], [240, 135], [104, 137]], '#120d08');
+  polygon(ctx, [[104, 122], [236, 120], [237, 133], [105, 135]], '#3b2c1e');
+  polygon(ctx, [[105, 122], [236, 120], [236, 123], [105, 125]], '#6b5136');
+  polygon(ctx, [[105, 132], [237, 130], [237, 133], [105, 135]], '#241a10');
+  ctxAlpha(ctx, 0.6, () => {
+    pixelLine(ctx, [110, 127], [232, 125], '#241a10', 1);
+    pixelLine(ctx, [112, 130], [230, 128], '#5a422a', 1);
+  });
+  // End grain + iron bolts, not a clean orange rectangle.
+  polygon(ctx, [[232, 121], [238, 120], [239, 134], [233, 134]], '#2a1e14');
+  pixelLine(ctx, [234, 123], [237, 132], '#6b5136', 1);
+  for (const x of [112, 168, 224]) { px(ctx, x, 123, 2, 10, '#181c22'); px(ctx, x, 124, 1, 1, '#9ca3af'); }
+}
+function timberBrace(ctx: CanvasRenderingContext2D, a: Point, b: Point) {
+  pixelLine(ctx, a, b, '#120d08', 5);
+  pixelLine(ctx, a, b, '#3b2c1e', 3);
+  pixelLine(ctx, [a[0], a[1] - 1], [b[0], b[1] - 1], '#6b5136', 1);
+  px(ctx, a[0] - 1, a[1] - 1, 2, 2, '#181c22'); px(ctx, b[0] - 1, b[1] - 1, 2, 2, '#181c22');
+}
+
 interface RiftLayers {
   distant: HTMLCanvasElement;
   geology: HTMLCanvasElement;
@@ -243,7 +332,7 @@ export const calderaJob = new Job(function* (): Generator<unknown, RiftLayers, u
   const slice = sliceTimer();
   const [distant, d] = makeCanvas(W, H);
   const [low, l] = makeCanvas(W / 2, H / 2);
-  const dark = hex3('#0b1c24'), light = hex3('#2e474c'), warm = hex3('#7a7048');
+  const dark = hex3('#0a141a'), light = hex3('#24343a'), warm = hex3('#6a5f3c');
   yield* paintPixelsGen(l, 0, 0, W / 2, H / 2, (hx, hy, o) => {
     const x = hx * 2, y = hy * 2;
     const texture = n.fbm(x * 0.004, y * 0.007, 3);
@@ -256,8 +345,19 @@ export const calderaJob = new Job(function* (): Generator<unknown, RiftLayers, u
     o[3] = 255;
   });
   d.drawImage(low, 0, 0, W, H);
+  // A far limestone wall closes the chamber instead of an open gradient void.
+  const FAR_WALL: Point[] = [[-64, 280], [180, 250], [420, 316], [650, 276], [900, 336],
+    [1180, 296], [1460, 356], [1720, 316], [1984, 340], [1984, 820], [-64, 820]];
+  yield* limestoneGen(d, FAR_WALL, 201, '#070e12', '#141f24', '#2c3a3c');
+  yield* beddingGen(d, FAR_WALL, 201, '#0a1216', '#233034');
+  for (let i = 0; i < 18; i++) {
+    const x = 40 + i * 108 + hash(i * 5) * 40;
+    const y = surfaceAt(FAR_WALL, x);
+    const len = 18 + hash(i * 3) * 46, w = 4 + hash(i) * 8;
+    polygon(d, [[x - w, y - 2], [x + w, y - 2], [x + w * 0.3, y + len * 0.6], [x, y + len], [x - w * 0.3, y + len * 0.55]], '#0c161c');
+  }
 
-  // Full-height pillars fuse into the roof and pass below the waterline.
+  // Flowstone buttresses fuse into the roof and pass below the waterline.
   for (const [ci, center, half] of [[0, 115, 128], [1, 523, 103], [2, 906, 75], [3, 1824, 113]]) {
     const centerline = new Float32Array(H), radius = new Float32Array(H);
     let left = W, right = 0;
@@ -274,7 +374,7 @@ export const calderaJob = new Job(function* (): Generator<unknown, RiftLayers, u
       right = Math.max(right, centerline[y] + radius[y]);
     }
     const x0 = Math.max(0, Math.floor(left) - 3), x1 = Math.min(W, Math.ceil(right) + 3);
-    const deep = hex3('#142c33'), lit = hex3('#6f7d6d');
+    const deep = hex3('#101f26'), lit = hex3('#51605a');
     yield* paintPixelsGen(d, x0, 0, x1 - x0, H, (x, y, o) => {
       const q = (x - centerline[y]) / radius[y];
       if (Math.abs(q) > 1) return;
@@ -282,14 +382,16 @@ export const calderaJob = new Job(function* (): Generator<unknown, RiftLayers, u
       const fracture = Math.abs(n.noise(x * 0.09, y * 0.002 + ci) - 0.5) < 0.018 ? -0.16 : 0;
       const lambert = clamp(0.24 + Math.sqrt(Math.max(0, 1 - q * q)) * 0.38 + q * 0.18 + (flutes - 0.5) * 0.62 + fracture);
       const k = band(lambert, 9, x, y);
-      for (let c = 0; c < 3; c++) o[c] = deep[c] + (lit[c] - deep[c]) * k * 0.6;
+      for (let c = 0; c < 3; c++) o[c] = deep[c] + (lit[c] - deep[c]) * k * 0.52;
       o[3] = 255;
     });
   }
 
   const [geology, g] = makeCanvas(W, H);
-  yield* rockTextureGen(g, RIGHT_WALL, '#283e3e', '#b8a980', 61);
-  yield* beddingGen(g, RIGHT_WALL, 61, '#243a38', '#5f6b52');
+  yield* limestoneGen(g, RIGHT_WALL, 61, '#1c2226', '#343b3c', '#9a9382');
+  yield* beddingGen(g, RIGHT_WALL, 61, '#1c2226', '#6f6a58');
+  // Local sulfur staining follows the vein; the host limestone stays neutral.
+  ctxAlpha(g, 0.18, () => { ellipse(g, 1580, 470, 90, 160, '#8a7a3a'); ellipse(g, 1500, 590, 150, 46, '#7a6a34'); });
   // Eroded benches belong to the same cliff, not disconnected floating slabs.
   for (let i = 0; i < BENCHES.length; i++) {
     const profile = BENCHES[i];
@@ -337,12 +439,20 @@ export const calderaJob = new Job(function* (): Generator<unknown, RiftLayers, u
   yield;
 
   const [ledge, path] = makeCanvas(W, H);
-  yield* rockTextureGen(path, LEDGE, '#233c43', '#9eaa8a', 125);
-  yield* beddingGen(path, LEDGE, 125, '#1d3338', '#6f8270');
+  yield* limestoneGen(path, LEDGE, 125, '#171d20', '#2c3336', '#8f8a78');
+  yield* beddingGen(path, LEDGE, 125, '#171d20', '#6a6656');
+  // A walkable top surface, not a vertical wall painted like a floor.
+  const SURFACE: Point[] = [...PATH_TOP, ...[...PATH_TOP].reverse().map(([x, y]) => [x, y + 18] as Point)];
+  yield* limestoneGen(path, SURFACE, 126, '#2a2a24', '#4a4a40', '#b0a88e');
+  for (let i = 0; i < 26; i++) {
+    const x = -20 + i * 29 + hash(i * 3) * 12;
+    const y = groundAt(x) + 4 + hash(i) * 9;
+    pixelLine(path, [x, y], [x + 8 + hash(i * 7) * 10, y + (hash(i * 5) - 0.5) * 3], '#2a2a24', 1);
+  }
   for (let i = 1; i < PATH_TOP.length; i++) {
     const a = PATH_TOP[i - 1], b = PATH_TOP[i];
-    pixelLine(path, a, b, '#b4baa0', 2);
-    pixelLine(path, [a[0], a[1] + 3], [b[0], b[1] + 3], '#4b6259', 2);
+    pixelLine(path, a, b, '#c2bca4', 2);
+    pixelLine(path, [a[0], a[1] + 3], [b[0], b[1] + 3], '#3a3f38', 2);
   }
   for (let i = 0; i < 14; i++) {
     const x = 25 + i * 43 + hash(i) * 10;
@@ -350,66 +460,50 @@ export const calderaJob = new Job(function* (): Generator<unknown, RiftLayers, u
     yield* rockTextureGen(path, stone(x, y, 5 + hash(i) * 8, 4 + hash(i * 3) * 6, i + 5), '#20373c', '#7f927d', i + 141);
   }
 
-  // Front-facing adit at the cliff edge: dark receding tunnel behind, solid
-  // limestone left/top, two timber legs on stone footings, open cavern to right.
+  // Natural limestone mouth. The timber set is RECESSED in the tunnel shadow;
+  // the foreground layer is only rock, stone footings and the threshold slab.
   const [portalBack, pb] = makeCanvas(PORTAL.w, PORTAL.h);
-  polygon(pb, [[120, 230], [120, 144], [132, 132], [208, 132], [220, 144], [220, 230]], '#071014');
-  polygon(pb, [[120, 230], [220, 230], [202, 206], [138, 206]], '#1a2326');
-  pixelLine(pb, [132, 230], [148, 206], '#3a4a44', 1);
-  pixelLine(pb, [208, 230], [192, 206], '#2a3a34', 1);
+  polygon(pb, [[118, 232], [118, 128], [222, 128], [222, 232]], '#050a0d');
+  polygon(pb, [[118, 232], [222, 232], [204, 208], [136, 208]], '#141a1c');
+  for (const y of [214, 222, 230]) {
+    const k = (y - 208) / 24;
+    pixelLine(pb, [136 - k * 8, y], [204 + k * 8, y], '#2a2118', 2);
+  }
+  pixelLine(pb, [140, 232], [160, 208], '#3a2f24', 2);
+  pixelLine(pb, [200, 232], [180, 208], '#3a2f24', 2);
+  pixelLine(pb, [141, 232], [161, 208], '#6b5136', 1);
+  pixelLine(pb, [199, 232], [179, 208], '#6b5136', 1);
+  // Rough timbers just inside the mouth, dimmed by the rock lip.
+  ctxAlpha(pb, 0.8, () => { timberPost(pb, 118, 11); timberPost(pb, 220, 29); timberLintel(pb); });
+  ctxAlpha(pb, 0.65, () => { timberBrace(pb, [126, 138], [140, 152]); timberBrace(pb, [224, 138], [210, 152]); });
   for (let i = 0; i < 3; i++) {
-    const inset = 10 + i * 12, yTop = 144 + i * 8, yBot = 228 - i * 6;
-    ctxAlpha(pb, 0.5 - i * 0.12, () => {
-      px(pb, 120 + inset, yTop, 4, yBot - yTop, '#2a2e36');
-      px(pb, 220 - inset - 4, yTop, 4, yBot - yTop, '#2a2e36');
-      px(pb, 120 + inset, yTop - 4, 100 - inset * 2, 4, '#2a2e36');
+    const inset = 10 + i * 10, yTop = 140 + i * 7, yBot = 230 - i * 5;
+    ctxAlpha(pb, 0.4 - i * 0.1, () => {
+      px(pb, 118 + inset, yTop, 3, yBot - yTop, '#2a2118');
+      px(pb, 222 - inset - 3, yTop, 3, yBot - yTop, '#2a2118');
+      px(pb, 118 + inset, yTop - 3, 104 - inset * 2, 3, '#2a2118');
     });
   }
   const [portalFront, pf] = makeCanvas(PORTAL.w, PORTAL.h);
-  const LEFT_MASS: Point[] = [[0, 236], [0, 150], [36, 104], [84, 80], [108, 100], [120, 144], [120, 236]];
-  const ARCH: Point[] = [[84, 80], [120, 52], [190, 48], [232, 72], [268, 84], [232, 100], [220, 144], [120, 144], [108, 100]];
-  yield* rockTextureGen(pf, LEFT_MASS, '#233c43', '#9eaa8a', 126);
-  yield* rockTextureGen(pf, ARCH, '#233c43', '#9eaa8a', 127);
-  yield* beddingGen(pf, LEFT_MASS, 126, '#182c31', '#7f927d');
-  yield* beddingGen(pf, ARCH, 127, '#182c31', '#7f927d');
-  // Stone footings carry the timber loads into the ledge.
-  yield* rockTextureGen(pf, [[102, 226], [104, 214], [122, 214], [124, 226]], '#3a4b42', '#a8aa79', 128);
-  yield* rockTextureGen(pf, [[214, 226], [216, 214], [234, 214], [236, 226]], '#3a4b42', '#a8aa79', 129);
-  for (const x of [108, 220]) {
-    px(pf, x, 136, 12, 78, '#1b232b');
-    px(pf, x + 1, 136, 9, 78, '#4a3522');
-    px(pf, x + 1, 136, 2, 78, '#7a5a38');
-    px(pf, x + 8, 136, 1, 78, '#241a12');
-    // Weathered grain, knots and iron straps instead of clean orange rectangles.
-    ctxAlpha(pf, 0.55, () => {
-      px(pf, x + 4, 140, 1, 70, '#2a1e14');
-      px(pf, x + 6, 146, 1, 62, '#6b4e30');
-    });
-    ellipse(pf, x + 5, 168, 1.5, 2, '#241a12');
-    ellipse(pf, x + 6, 194, 1, 1.5, '#2a1e14');
-    for (const y of [140, 206]) {
-      px(pf, x, y, 12, 3, '#20242c');
-      px(pf, x + 1, y, 10, 1, '#4b5563');
-      px(pf, x + 2, y + 1, 1, 1, '#9ca3af');
-      px(pf, x + 9, y + 1, 1, 1, '#9ca3af');
-    }
-  }
-  px(pf, 104, 122, 132, 14, '#1b232b');
-  px(pf, 105, 123, 130, 11, '#4a3522');
-  px(pf, 105, 123, 130, 2, '#7a5a38');
-  ctxAlpha(pf, 0.5, () => {
-    pixelLine(pf, [110, 128], [230, 128], '#2a1e14', 1);
-    pixelLine(pf, [112, 131], [228, 131], '#6b4e30', 1);
-  });
-  for (const x of [112, 168, 224]) px(pf, x, 124, 2, 10, '#20242c');
-  // Knee braces stay above the robot's head clearance.
-  pixelLine(pf, [116, 140], [132, 156], '#3a3a40', 4);
-  pixelLine(pf, [224, 140], [208, 156], '#3a3a40', 4);
-  ctxAlpha(pf, 0.35, () => px(pf, 120, 136, 100, 2, '#041014'));
+  const LEFT_MASS: Point[] = [[0, 236], [0, 150], [30, 108], [70, 84], [104, 96], [118, 128], [118, 236]];
+  const RIGHT_MASS: Point[] = [[222, 128], [244, 104], [272, 86], [304, 118], [320, 160], [320, 236], [222, 236]];
+  const TOP_ARCH: Point[] = [[70, 84], [110, 50], [178, 44], [232, 64], [272, 86], [244, 104], [222, 128], [118, 128], [104, 96]];
+  yield* limestoneGen(pf, LEFT_MASS, 126, '#171d20', '#2c3336', '#8f8a78');
+  yield* limestoneGen(pf, RIGHT_MASS, 127, '#171d20', '#2c3336', '#8f8a78');
+  yield* limestoneGen(pf, TOP_ARCH, 128, '#171d20', '#2c3336', '#8f8a78');
+  yield* beddingGen(pf, LEFT_MASS, 126, '#171d20', '#6a6656');
+  yield* beddingGen(pf, RIGHT_MASS, 127, '#171d20', '#6a6656');
+  yield* beddingGen(pf, TOP_ARCH, 128, '#171d20', '#6a6656');
+  // Rock lip shadows the recessed timber; no bright frame slapped on the face.
+  ctxAlpha(pf, 0.55, () => { polygon(pf, [[118, 128], [222, 128], [222, 136], [118, 136]], '#050a0d'); });
+  yield* limestoneGen(pf, [[100, 228], [103, 214], [123, 214], [126, 228]], 129, '#2a2a24', '#3a3f38', '#9a9382');
+  yield* limestoneGen(pf, [[214, 228], [217, 214], [237, 214], [240, 228]], 130, '#2a2a24', '#3a3f38', '#9a9382');
+  yield* limestoneGen(pf, [[112, 232], [228, 232], [236, 240], [104, 240]], 131, '#2a2a24', '#4a4a40', '#b0a88e');
   yield;
 
   const [foreground, f] = makeCanvas(W, H);
-  yield* rockTextureGen(f, CEILING, '#071b24', '#42635e', 151);
+  yield* limestoneGen(f, CEILING, 151, '#050e12', '#0a161c', '#3a4a44');
+  yield* beddingGen(f, CEILING, 151, '#050e12', '#2a3a34');
   // Dripstone is fused to the ceiling contour, not floating icicles.
   for (const [x, len, w] of [[250, 46, 12], [650, 62, 16], [1050, 38, 10], [1450, 70, 18]]) {
     const y = ceilingAt(x);
@@ -436,7 +530,7 @@ export const calderaJob = new Job(function* (): Generator<unknown, RiftLayers, u
 
 export function getCaldera() { return calderaJob.get(); }
 
-const WATER_RAMP = Array.from({ length: 124 }, (_, y) => mix('#577d65', '#0b2c39', finish(y / 124)));
+const WATER_RAMP = Array.from({ length: 124 }, (_, y) => mix('#31514b', '#061820', finish(y / 124)));
 function water(ctx: CanvasRenderingContext2D, t: number, layers: RiftLayers) {
   for (let y = SEA; y < H; y += 2) px(ctx, 0, y, W, 2, WATER_RAMP[Math.min(123, Math.floor((y - SEA) * 0.6))]);
   ctx.save(); ctx.globalAlpha = 0.46;
