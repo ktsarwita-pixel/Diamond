@@ -1063,7 +1063,10 @@ export class GameEngine {
     // Eased visual swing; when idle the drill arm relaxes downward and sways
     const resting = p.idleTime > 1.2;
     const sleepy = p.idleTime > 9;
-    const rest = (p.facing === 'left' ? Math.PI - 0.8 : 0.8) * (sleepy ? 1.35 : 1);
+    // Tilt the resting auger downward from the horizon on each side. Multiplying
+    // the whole left angle (π - 0.8) by 1.35 pushed it past π and pointed it up.
+    const restTilt = sleepy ? 1.05 : 0.8;
+    const rest = p.facing === 'left' ? Math.PI - restTilt : restTilt;
     const sway = Math.sin(p.idleTime * 1.1) * (sleepy ? 0.03 : 0.09);
     p.aimVisual = lerpAngle(
       p.aimVisual,

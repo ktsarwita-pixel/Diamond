@@ -420,6 +420,28 @@ export function cubeGroundPose(p: CubeDrawParams, sx: number, sy: number, angle:
   return { y, treadBottom: y + treadMax, floor, sx, sy, angle, scale };
 }
 
+/** Low-hull rest pose must hang DOWN on the chosen side, never flip upward.
+ * The old naive lerp across ±π and the old `min(local, cap)` clamp both turned
+ * left/up aim angles into negative elevations when the rig powered down. */
+export function cubeDrillAim(p: CubeDrawParams, stressed: boolean, hurtHeave: number) {
+  if (!stressed) return p.aimAngle;
+  const side = p.facing === 'left' ? -1 : p.facing === 'right' ? 1 : Math.cos(p.aimAngle) < 0 ? -1 : 1;
+  const heave = Math.max(0, Math.min(1, hurtHeave));
+  const sag = 0.18 + heave * 0.025;
+  const target = side < 0 ? Math.PI - sag : sag;
+  const droop = Math.min(1, 0.78 + heave * 0.08);
+  const delta = Math.atan2(Math.sin(target - p.aimAngle), Math.cos(target - p.aimAngle));
+  const blended = p.aimAngle + delta * droop;
+  const aim = Math.atan2(Math.sin(blended), Math.cos(blended));
+  // Clamp the *elevation* above the downward sag floor, then rebuild the angle
+  // on the chosen side. This catches near-horizontal and upward leftovers too.
+  const elevation = Math.max(sag, Math.atan2(Math.sin(aim), Math.abs(Math.cos(aim))));
+  const rest = side < 0 ? Math.PI - elevation : elevation;
+  // Grounded low-hull idle is a hard rest pose; airborne power-down still may
+  // not point the auger at the sky. Active drilling/thrust keeps player aim.
+  return p.groundY !== undefined && !p.isDrilling && p.thrustPower < 0.1 ? target : rest;
+}
+
 export function drawCubeMiner(ctx: CanvasRenderingContext2D, p: CubeDrawParams) {
   if (p.invuln && Math.floor(p.time * 18) % 3 === 0) return;
 
@@ -880,14 +902,16 @@ export function drawCubeMiner(ctx: CanvasRenderingContext2D, p: CubeDrawParams) 
   /* ---- Articulated drill arm ---- */
   if (!p.hideDrill) {
     ctx.save();
-    // Low hull: the drill arm hangs limp toward the ground, twitching with each shudder.
-    const droop = stressed ? 0.55 + hurtHeave * 0.08 : 0;
-    let aim = stressed ? p.aimAngle * (1 - droop) + (Math.PI / 2 - 0.35) * droop : p.aimAngle;
-    if (p.groundY !== undefined && !p.isDrilling && p.thrustPower < 0.1) {
-      // A resting auger can droop, but cannot stab through the floor. Retain
-      // upward aiming and the chosen left/right facing while limiting down-tilt.
+    // Low hull: the drill arm hangs limp toward the ground, twitching with each
+    // shudder. cubeDrillAim keeps the rest pose on the correct side and below
+    // the horizon for every input aim quadrant; healthy aim is untouched.
+    let aim = cubeDrillAim(p, stressed, hurtHeave);
+    if (!stressed && p.groundY !== undefined && !p.isDrilling && p.thrustPower < 0.1) {
+      // Healthy resting augers keep explicit upward aim, but a steep downward
+      // rest cannot stab through the collision floor. Low-hull rest is already
+      // clamped to a safe downward sag by cubeDrillAim.
       const local = Math.atan2(Math.sin(aim), Math.abs(Math.cos(aim)));
-      const safe = Math.min(local, stressed ? 0.18 + hurtHeave * 0.025 : 0.2);
+      const safe = Math.min(local, 0.2);
       aim = Math.cos(aim) < 0 ? Math.PI - safe : safe;
     }
     const cos = Math.cos(aim);

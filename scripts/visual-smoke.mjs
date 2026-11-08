@@ -150,7 +150,7 @@ try {
       idleRobotFrames.push(digest());
     }
     // Gameplay rig: a low-hull idle must differ from the healthy idle and must animate.
-    const { drawCubeMiner } = await import('/src/game/characters.ts');
+    const { drawCubeMiner, cubeDrillAim } = await import('/src/game/characters.ts');
     const rigFrame = (time, lowHull) => {
       g.clearRect(0, 0, 640, 360);
       drawCubeMiner(g, { x: 120, y: 200, facing: 'right', aimAngle: 0.9, drillSpin: 0, drillExtend: 0, thrustPower: 0, isDrilling: false,
@@ -176,6 +176,30 @@ try {
       hurtAnimates: rigAt(0.2, true) !== rigAt(0.5, true),
       cycleHasThreeStates: new Set([awake, asleep, waking]).size === 3,
       wakeShowsIcon: waking !== asleep && waking !== awake,
+    };
+    // Regression: a powered-down auger must sag DOWN on the correct side for
+    // every aim quadrant, including left/up inputs and the old sleepy left rest.
+    const drillBase = { x: 120, y: 218, drillSpin: 0, drillExtend: 0, thrustPower: 0, isDrilling: false,
+      drillTier: 5, armorTier: 1, thrusterTier: 1, cargoFill: 0, treadPhase: 0, bob: 0, squashX: 1, squashY: 1,
+      time: 3, invuln: false, tint: null, godMode: false, idleTime: 3, combo: 0, lowHull: true, lowFuel: false, cargoFull: false, scale: 3 };
+    const drillAimChecks = [];
+    for (const facing of ['left', 'right', 'up', 'down']) {
+      for (const aimAngle of [-Math.PI, -2.4, -Math.PI / 2, -0.4, 0, 0.9, Math.PI / 2, 2.4, Math.PI, 3.16]) {
+        for (const heave of [0, 0.5, 1]) for (const grounded of [true, false]) {
+          const aim = cubeDrillAim({ ...drillBase, facing, aimAngle, groundY: grounded ? 225 : undefined }, true, heave);
+          drillAimChecks.push({
+            down: Math.sin(aim),
+            side: Math.cos(aim) < 0 ? -1 : 1,
+            expected: facing === 'left' ? -1 : facing === 'right' ? 1 : Math.cos(aimAngle) < 0 ? -1 : 1,
+          });
+        }
+      }
+    }
+    const lowHullDrill = {
+      samples: drillAimChecks.length,
+      upward: drillAimChecks.filter(c => c.down < -1e-6).length,
+      wrongSide: drillAimChecks.filter(c => c.side !== c.expected).length,
+      minDown: Math.min(...drillAimChecks.map(c => c.down)),
     };
     const opened = [];
     const game = new GameEngine(() => {}, kind => opened.push(kind));
@@ -277,19 +301,37 @@ try {
       seated: pointInPolygon(s.contact, riftGeometry.benches[s.bench]),
       embed: s.contact[1] - s.supportY,
     }));
+    const channelYAt = (x) => {
+      const route = riftGeometry.heart.channel;
+      for (let i = 1; i < route.length; i++) {
+        const a = route[i - 1], b = route[i];
+        if (x >= Math.min(a[0], b[0]) && x <= Math.max(a[0], b[0])) {
+          return a[1] + (b[1] - a[1]) * ((x - a[0]) / (b[0] - a[0]));
+        }
+      }
+      return Infinity;
+    };
+    const heartSupport = riftGeometry.heart.crystals.map(c => ({
+      seated: c.footprint.every(pt => pointInPolygon(pt, riftGeometry.heart.root)),
+      streamClearance: channelYAt(c.x) - (c.base + 2),
+    }));
+    const heartSeam = {
+      inWall: riftGeometry.heart.seam.every(pt => pointInPolygon(pt, riftGeometry.rightWall)),
+      rooted: pointInPolygon(riftGeometry.heart.seam[riftGeometry.heart.seam.length - 1], riftGeometry.heart.root),
+    };
     // Verify the FINAL rendered cliff layer has one connected silhouette.
     // A disconnected rock island is a stronger failure than complete contours alone.
     const renderedRockComponents = islands(calderaJob.get().geology, 1);
     const renderedLedgeComponents = islands(calderaJob.get().ledge, 1);
     return {
       sceneResults, buildings, humans, opened, moved, connectivity, liteScenes, scene3Grounding,
-      calderaSupport, idleRobotFrames, lowHullIdle,
+      calderaSupport, idleRobotFrames, lowHullIdle, lowHullDrill,
       groundContact: {
         samples: treadContacts.length, deepest: Math.max(...treadContacts) - floor,
         largestGap: floor - Math.min(...treadContacts), largestTrackTilt: Math.max(...treadAngles),
       },
       stones, missingStonePixels, maxCameraZoomStep: Math.max(...cameraSteps),
-      boulderSupport, renderedRockComponents, renderedLedgeComponents,
+      boulderSupport, heartSupport, heartSeam, renderedRockComponents, renderedLedgeComponents,
       disposalMotion, disposalContinuity, disposalBuilt, disposalFraming,
       disposalSky: disposalSky ? { width: disposalSky.sky.width, height: disposalSky.sky.height } : null,
       reachFrames, fontsLoaded,
@@ -329,6 +371,11 @@ try {
   assert.ok(report.lowHullIdle.healthyVsHurt && report.lowHullIdle.hurtAnimates, `Low-hull idle must be distinct and animated: ${JSON.stringify(report.lowHullIdle)}`);
   assert.ok(report.lowHullIdle.cycleHasThreeStates, `Low-hull idle must cycle sleep/wake: ${JSON.stringify(report.lowHullIdle)}`);
   assert.ok(report.lowHullIdle.wakeShowsIcon, `Low-hull wake must show the danger icon: ${JSON.stringify(report.lowHullIdle)}`);
+  assert.ok(report.lowHullDrill.samples >= 200 && report.lowHullDrill.upward === 0 && report.lowHullDrill.wrongSide === 0 && report.lowHullDrill.minDown > 0.1,
+    `Low-hull drill flips upward or crosses sides: ${JSON.stringify(report.lowHullDrill)}`);
+  for (const c of report.heartSupport) assert.ok(c.seated && c.streamClearance >= 8,
+    `Heart crystal floats in its socket or the stream noclips through it: ${JSON.stringify(c)}`);
+  assert.ok(report.heartSeam.inWall && report.heartSeam.rooted, 'Heart vein leaves the host wall or fails to reach the socket mound');
   for (const l of report.liteScenes) assert.ok(l.lit > 2000, `${l.id} must render in Lite mode`);
   for (const scene of report.sceneResults) assert.equal(scene.distinct, 3, `${scene.id} must animate and render at every phase`);
   for (const b of report.buildings) assert.ok(b.animated, `${b.kind} animation is frozen`);

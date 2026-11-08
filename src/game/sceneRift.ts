@@ -7,9 +7,36 @@ export const CALDERA_W = 1920;
 export const CALDERA_H = 960;
 export const CALDERA_DURATION = 18;
 const W = CALDERA_W, H = CALDERA_H, SEA = 754;
-const CORE: Point = [1476, 430];
+const CORE: Point = [1476, 390];
 const HEART_BASE = 610;
 const HEART_HEIGHT = 336;
+const HEART_ROOT: Point[] = [[1340, 626], [1380, 580], [1428, 560], [1478, 548],
+  [1534, 540], [1590, 550], [1626, 576], [1616, 616], [1552, 642], [1462, 650], [1380, 646]];
+interface CrystalSpec { x: number; base: number; h: number; w: number; tilt: number; color: string }
+const HEART_CRYSTALS: CrystalSpec[] = [
+  { x: 1476, base: HEART_BASE, h: HEART_HEIGHT, w: 88, tilt: -6, color: '#ead896' },
+  { x: 1402, base: 614, h: 238, w: 58, tilt: -20, color: '#d5c57c' },
+  { x: 1548, base: 602, h: 276, w: 64, tilt: 16, color: '#e2ce88' },
+  { x: 1596, base: 588, h: 184, w: 42, tilt: 26, color: '#cabb75' },
+  { x: 1368, base: 618, h: 150, w: 36, tilt: -30, color: '#bcb060' },
+];
+for (let row = 0; row < 2; row++) {
+  const count = 9 - row * 2;
+  for (let i = 0; i < count; i++) {
+    const x = 1372 + i * (230 / count) + hash(i * 7 + row) * 8;
+    HEART_CRYSTALS.push({
+      x, base: 618 - (x - 1476) * 0.08 + row * 5,
+      h: 28 + hash(i * 3.1 + row * 41) * (58 + row * 22),
+      w: 10 + hash(i + row * 5) * 18, tilt: (x - 1476) * 0.1,
+      color: ['#bcb060', '#d5c57c', '#96a161', '#e2ce88'][(i + row) % 4],
+    });
+  }
+}
+// The stream skirts the foot of the socket mound; it never paints across a crystal.
+const HEART_CHANNEL: Point[] = [[1666, 526], [1620, 543], [1612, 580], [1600, 624],
+  [1548, 646], [1462, 652], [1388, 646], [1332, 634], [1261, 632], [1234, 630]];
+const HEART_SEAM: Point[] = [[1604, 250], [1560, 320], [1548, 372], [1572, 420],
+  [1600, 470], [1612, 520], [1598, 566]];
 const finish = (x: number) => { const t = clamp(x); return t * t * t * (10 + t * (-15 + t * 6)); };
 const n = makeNoise(124612);
 
@@ -93,6 +120,12 @@ export const riftGeometry = {
   ledge: LEDGE, rightWall: RIGHT_WALL, ceiling: CEILING,
   boulders: TALUS.map((s) => s.points), waterline: SEA, benches: BENCHES,
   boulderSupports: TALUS.map(({ contact, supportY, bench }) => ({ contact, supportY, bench })),
+  heart: {
+    root: HEART_ROOT, seam: HEART_SEAM, channel: HEART_CHANNEL,
+    crystals: HEART_CRYSTALS.map(c => ({ ...c, footprint: [
+      [c.x - c.w * 0.48, c.base + 2], [c.x + c.w * 0.48, c.base + 2], [c.x, c.base + 2],
+    ] as Point[] })),
+  },
 };
 export function calderaWalkerAt(t: number) {
   const travel = finish((t - 0.35) / 7.2);
@@ -196,39 +229,16 @@ export const calderaJob = new Job(function* (): Generator<unknown, RiftLayers, u
     [1531, 535], [1584, 546], [1607, 568], [1554, 596], [1450, 630], [1352, 623]];
   yield* rockTextureGen(g, bed, '#616344', '#cab776', 117);
   // The Heart of Sulfur is a wall-rooted megacluster, not a small shelf prop.
-  // Its root mound overlaps the bed and host wall so the geology stays connected.
-  const heartRoot: Point[] = [[1352, 614], [1388, 584], [1432, 566], [1478, 556],
-    [1532, 548], [1586, 556], [1618, 578], [1604, 612], [1548, 634], [1462, 642], [1388, 632]];
-  yield* rockTextureGen(g, heartRoot, '#6b6747', '#d6c481', 118);
-  crystal(g, 1476, HEART_BASE, HEART_HEIGHT, 88, -6, '#ead896');
-  crystal(g, 1402, 614, 238, 58, -20, '#d5c57c');
-  crystal(g, 1548, 602, 276, 64, 16, '#e2ce88');
-  crystal(g, 1596, 588, 184, 42, 26, '#cabb75');
-  crystal(g, 1368, 618, 150, 36, -30, '#bcb060');
-  for (let row = 0; row < 2; row++) {
-    const count = 9 - row * 2;
-    for (let i = 0; i < count; i++) {
-      const x = 1372 + i * (230 / count) + hash(i * 7 + row) * 8;
-      const base = 618 - (x - 1476) * 0.08 + row * 5;
-      const h = 28 + hash(i * 3.1 + row * 41) * (58 + row * 22);
-      crystal(g, x, base, h, 10 + hash(i + row * 5) * 18, (x - 1476) * 0.1,
-        ['#bcb060', '#d5c57c', '#96a161', '#e2ce88'][(i + row) % 4]);
-    }
-    yield;
+  // Its socket mound overlaps the bed and host wall so the geology stays connected.
+  yield* rockTextureGen(g, HEART_ROOT, '#6b6747', '#d6c481', 118);
+  // Vein and stream are painted into the host rock BEFORE the crystals, so no
+  // surface line can noclip across a crystal face. The stream also stays below
+  // every crystal foot by construction (HEART_CHANNEL).
+  for (let i = 1; i < HEART_SEAM.length; i++) {
+    pixelLine(g, HEART_SEAM[i - 1], HEART_SEAM[i], '#182d2c', 5);
+    pixelLine(g, [HEART_SEAM[i - 1][0] + 1, HEART_SEAM[i - 1][1]], [HEART_SEAM[i][0] + 1, HEART_SEAM[i][1]], '#c8ad61', 2);
   }
-  // A bright inner facet makes the central crystal read as a glowing heart.
-  pixelLine(g, [1476, HEART_BASE - 18], [1470, HEART_BASE - HEART_HEIGHT + 26], '#fff2c2', 2);
-  pixelLine(g, [1458, HEART_BASE - 40], [1466, HEART_BASE - HEART_HEIGHT + 60], '#f7e6a8');
-  const seam: Point[] = [[1604, 250], [1560, 320], [1548, 372], [1500, 430], [1488, 500], [1476, HEART_BASE]];
-  for (let i = 1; i < seam.length; i++) {
-    pixelLine(g, seam[i - 1], seam[i], '#182d2c', 5);
-    pixelLine(g, [seam[i - 1][0] + 1, seam[i - 1][1]], [seam[i][0] + 1, seam[i][1]], '#c8ad61', 2);
-  }
-  // Water runs in connected grooves before dropping over the cliff lips.
-  const channels: Point[][] = [
-    [[1666, 526], [1620, 543], [1569, 550], [1467, 585], [1400, 601], [1332, 616], [1261, 626], [1222, 630]],
-    [[1745, 294], [1707, 327], [1690, 346], [1666, 368]],
-  ];
+  const channels: Point[][] = [HEART_CHANNEL, [[1745, 294], [1707, 327], [1690, 346], [1666, 368]]];
   for (const route of channels) {
     for (let i = 1; i < route.length; i++) {
       pixelLine(g, route[i - 1], route[i], '#203b37', 8);
@@ -238,6 +248,17 @@ export const calderaJob = new Job(function* (): Generator<unknown, RiftLayers, u
   }
   polygon(g, [[1639, 524], [1661, 520], [1686, 525], [1679, 534], [1649, 533]], '#31574b');
   pixelLine(g, [1645, 524], [1678, 526], '#bdcfa0');
+  for (let i = 0; i < HEART_CRYSTALS.length; i++) {
+    const c = HEART_CRYSTALS[i];
+    // A dark socket collar seats each foot into the mound instead of letting it
+    // hover on the rock surface or slice through an unbroken face.
+    ellipse(g, c.x, c.base + 2, c.w * 0.62, 4, '#41452e');
+    crystal(g, c.x, c.base, c.h, c.w, c.tilt, c.color);
+    if (i % 4 === 0) yield;
+  }
+  // A bright inner facet makes the central crystal read as a glowing heart.
+  pixelLine(g, [1476, HEART_BASE - 18], [1470, HEART_BASE - HEART_HEIGHT + 26], '#fff2c2', 2);
+  pixelLine(g, [1458, HEART_BASE - 40], [1466, HEART_BASE - HEART_HEIGHT + 60], '#f7e6a8');
   yield;
 
   const [ledge, path] = makeCanvas(W, H);
@@ -380,7 +401,7 @@ export function drawCalderaScene(ctx: CanvasRenderingContext2D, t: number) {
     px(ctx, x, y, i % 5 === 0 ? 2 : 1, i % 5 === 0 ? 2 : 1, '#f5e6b0');
     ctx.restore();
   }
-  for (const [vx, vy, ph] of [[1488, 500, 0], [1500, 430, 1.4], [1548, 372, 2.8]]) {
+  for (const [vx, vy, ph] of [[1598, 566, 0], [1612, 520, 1.4], [1600, 470, 2.8]]) {
     pixelGlow(ctx, vx, vy, 26, '#e9d68f', 0.1 + 0.12 * Math.max(0, Math.sin(t * 1.15 + ph)));
   }
   for (let i = 0; i < CASCADES.length; i++) {
