@@ -10,11 +10,16 @@ export type RGB = [number, number, number];
 export type Palette = { ink: string; light: string; mid: string; dark: string; deep: string; glow: string };
 
 export const INK = '#07050c';
+import { cacheGet, cacheSet } from './spriteCache';
 
 /* ------------------------------ helpers ------------------------------ */
 export function R(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, c: string) {
   ctx.fillStyle = c;
-  ctx.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h));
+  // Round edges, not position and width independently: adjacent animated panels
+  // must not open a one-pixel seam when their fractional coordinates change.
+  const left = Math.round(x), top = Math.round(y);
+  const right = Math.round(x + w), bottom = Math.round(y + h);
+  if (right > left && bottom > top) ctx.fillRect(left, top, right - left, bottom - top);
 }
 
 const rgbCache = new Map<string, RGB>();
@@ -83,8 +88,7 @@ export function skyCanvas(stops: Array<[number, string]>, w = CW, h = CH): HTMLC
   sctx.imageSmoothingEnabled = false;
   paintSkyRaw(sctx, stops, 0, h, 0, w);
   // Keep the cache bounded so dynamically colored skies can never leak
-  if (skyCache.size > 24) skyCache.clear();
-  skyCache.set(key, sprite);
+  cacheSet(skyCache, key, sprite, 24);
   return sprite;
 }
 
@@ -113,7 +117,7 @@ function paintSkyRaw(ctx: CanvasRenderingContext2D, stops: Array<[number, string
 
 const cache = new Map<string, HTMLCanvasElement>();
 function cached(key: string, w: number, h: number, paint: (ctx: CanvasRenderingContext2D) => void): HTMLCanvasElement {
-  const hit = cache.get(key);
+  const hit = cacheGet(cache, key);
   if (hit) return hit;
   const c = document.createElement('canvas');
   c.width = w;
@@ -121,18 +125,16 @@ function cached(key: string, w: number, h: number, paint: (ctx: CanvasRenderingC
   const ctx = c.getContext('2d')!;
   ctx.imageSmoothingEnabled = false;
   paint(ctx);
-  if (cache.size > 400) cache.clear();
-  cache.set(key, c);
+  cacheSet(cache, key, c, 256);
   return c;
 }
 
 /* ------------------------------ clouds ------------------------------ */
 /** Metablob pixel cloud, shaded with dithered light and shadow. */
 export function cloudSprite(seed: number, w: number, h: number, light: string, mid: string, dark: string): HTMLCanvasElement {
-  return cached(`cloud-v2-${seed}-${w}-${h}-${light}-${mid}-${dark}`, w, h, (ctx) => {
+  return cached(`cloud-v3-${seed}-${w}-${h}-${light}-${mid}-${dark}`, w, h, (ctx) => {
     const lobes = Array.from({ length: 9 }, (_, i) => {
-      const t = i / 8;
-      const arch = Math.sin(t * Math.PI);
+      const t = i / 8, arch = Math.sin(t * Math.PI);
       return {
         cx: w * (0.12 + t * 0.76 + (hash(seed + i * 3) - 0.5) * 0.04),
         cy: h * (0.64 - arch * 0.24 + (hash(seed + i * 5) - 0.5) * 0.08),
@@ -140,41 +142,36 @@ export function cloudSprite(seed: number, w: number, h: number, light: string, m
         ry: h * (0.22 + arch * 0.18 + hash(seed + i * 11) * 0.08),
       };
     });
-    const specular = shade(light, 0.35);
-    const underside = shade(dark, -0.18);
-    const rimLight = mix(mid, light, 0.55);
-    const rimDark = mix(mid, dark, 0.55);
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        let bestLobe = -1;
-        let minNorm = 99;
-        let topDist = 99;
-        for (let i = 0; i < lobes.length; i++) {
-          const l = lobes[i];
-          const dx = (x - l.cx) / l.rx;
-          const dy = (y - l.cy) / l.ry;
-          const d = dx * dx + dy * dy;
-          if (d < 1 && d < minNorm) {
-            minNorm = d;
-            bestLobe = i;
-            topDist = (y - (l.cy - l.ry)) / (l.ry * 2);
-          }
+    const colors = [mid, shade(light, 0.35), light, shade(dark, -0.18), dark,
+      mix(mid, light, 0.55), mix(mid, dark, 0.55)].map(hexToRgb);
+    // One bulk upload, not a Canvas draw call for every cloud pixel. This also
+    // makes cold scene changes and the first plasma/cloud pass much cheaper.
+    const image = ctx.createImageData(w, h), data = image.data;
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      let inside = false, minNorm = 99, topDist = 99;
+      for (const l of lobes) {
+        const dx = (x - l.cx) / l.rx, dy = (y - l.cy) / l.ry;
+        const d = dx * dx + dy * dy;
+        if (d < 1 && d < minNorm) {
+          inside = true; minNorm = d;
+          topDist = (y - (l.cy - l.ry)) / (l.ry * 2);
         }
-        if (bestLobe < 0) continue;
-        const rel = y / h;
-        let col = mid;
-        if (topDist < 0.16 && rel < 0.52) col = specular;
-        else if (topDist < 0.36 && rel < 0.62) col = light;
-        else if (rel > 0.78) col = underside;
-        else if (rel > 0.62) col = dark;
-
-        if (ditherAt(x, y, 0.45)) {
-          if (topDist >= 0.32 && topDist < 0.48) col = rimLight;
-          else if (rel > 0.54 && rel <= 0.66) col = rimDark;
-        }
-        R(ctx, x, y, 1, 1, col);
       }
+      if (!inside) continue;
+      const rel = y / h;
+      let index = 0;
+      if (topDist < 0.16 && rel < 0.52) index = 1;
+      else if (topDist < 0.36 && rel < 0.62) index = 2;
+      else if (rel > 0.78) index = 3;
+      else if (rel > 0.62) index = 4;
+      if (ditherAt(x, y, 0.45)) {
+        if (topDist >= 0.32 && topDist < 0.48) index = 5;
+        else if (rel > 0.54 && rel <= 0.66) index = 6;
+      }
+      const col = colors[index], i = (y * w + x) * 4;
+      data[i] = col[0]; data[i + 1] = col[1]; data[i + 2] = col[2]; data[i + 3] = 255;
     }
+    ctx.putImageData(image, 0, 0);
   });
 }
 
@@ -521,7 +518,7 @@ const glowSprites = new Map<string, HTMLCanvasElement>();
 /** Additive radial glow — rendered once per colour, then blitted (no per-call gradients). */
 export function glowAt(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, color: string, a: number) {
   if (a <= 0.004 || r < 1) return;
-  let spr = glowSprites.get(color);
+  let spr = cacheGet(glowSprites, color);
   if (!spr) {
     spr = document.createElement('canvas');
     spr.width = spr.height = 64;
@@ -532,13 +529,13 @@ export function glowAt(ctx: CanvasRenderingContext2D, x: number, y: number, r: n
     grad.addColorStop(1, rgba(color, 0));
     g.fillStyle = grad;
     g.fillRect(0, 0, 64, 64);
-    glowSprites.set(color, spr);
+    cacheSet(glowSprites, color, spr, 64);
   }
   const prevOp = ctx.globalCompositeOperation;
   const prevA = ctx.globalAlpha;
   ctx.globalCompositeOperation = 'lighter';
   ctx.globalAlpha = prevA * Math.min(1, a);
-  ctx.drawImage(spr, x - r, y - r, r * 2, r * 2);
+  ctx.drawImage(spr, Math.round(x - r), Math.round(y - r), Math.round(r * 2), Math.round(r * 2));
   ctx.globalAlpha = prevA;
   ctx.globalCompositeOperation = prevOp;
 }
@@ -800,26 +797,23 @@ export function heroRobot(ctx: CanvasRenderingContext2D, o: HeroRobotOpts) {
   P(4, -4, 1, 1, BODY.sideDeep);
 
   // Half-unit engraving adds mechanical detail without changing CUBE-07's silhouette.
-  const D = (x: number, y: number, w: number, h: number, color: string) => {
-    ctx.fillStyle = color;
-    ctx.fillRect(x, y, w, h);
-  };
-  D(-7.5, -6.5, 7, 0.5, BODY.hi);
-  D(-0.5, -6.5, 0.5, 3.5, BODY.deep);
-  D(0.5, -6.5, 5.5, 0.5, BODY.hi);
-  D(5.5, -6, 0.5, 3, BODY.sideDeep);
-  D(-7.5, 2.5, 0.5, 1.5, BODY.light);
-  D(1, 1, 5, 0.5, BODY.deep);
+  const D = P;
+  D(-7, -6, 7, 1, BODY.hi);
+  D(0, -6, 1, 3, BODY.deep);
+  D(1, -6, 5, 1, BODY.hi);
+  D(5, -5, 1, 2, BODY.sideDeep);
+  D(-7, 2, 1, 2, BODY.light);
+  D(1, 1, 5, 1, BODY.deep);
   for (let i = 0; i < 4; i++) {
-    D(1 + i * 1.2, 1.5, 0.5, 1.5, BODY.sideDeep);
-    D(-9.5, -4.5 + i * 1.2, 0.5, 0.5, '#c2c7bb');
+    D(1 + i, 2, 1, 1, BODY.sideDeep);
+    D(-9, -4 + i, 1, 1, '#c2c7bb');
   }
-  D(-4.5, -5.5, 2, 0.5, shade(BODY.mid, -0.2));
-  D(2.5, -4.5, 1.5, 0.5, shade(BODY.mid, -0.2));
+  D(-4, -5, 2, 1, shade(BODY.mid, -0.2));
+  D(2, -4, 2, 1, shade(BODY.mid, -0.2));
   if (pm > 0.6) {
-    D(-4, -6.5, 1.5, 0.5, '#d3c2a0');
-    D(2, -3.5, 1, 0.5, '#573a29');
-    D(6, 1.5, 0.5, 2, '#d0b88d');
+    D(-4, -6, 2, 1, '#d3c2a0');
+    D(2, -3, 1, 1, '#573a29');
+    D(6, 2, 1, 2, '#d0b88d');
   }
 
   // Atmospheric re-entry scorching / blistering patches when paintMix is transitioning (0 < pm < 1)

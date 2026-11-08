@@ -3,7 +3,7 @@ import { Job, hex3, lerp3, makeCanvas, makeNoise, paintPixelsGen, smooth } from 
 import { AETHER_TECH, cinematicHuman } from './cineHumans';
 import { drawBuilding } from './outpostArt';
 import { isLite } from './quality';
-import { cable, ellipse, gear, metal, pipe, pixelGlow, pixelLine, polygon, px, rockTexture, windowGrid, type Point } from './pixelCraft';
+import { cable, ellipse, gear, metal, pipe, pixelGlow, pixelLine, polygon, px, rockTextureGen, windowGrid, type Point } from './pixelCraft';
 import { landJob } from './sceneImpact';
 
 export type StorySet = 'aether' | 'foundry' | 'new-aether' | 'exile' | 'workshop' | 'outpost';
@@ -29,18 +29,15 @@ const skyJob = new Job(function* () {
   return c;
 });
 
-const cityCache = new Map<boolean, HTMLCanvasElement>();
-export function getAetherCity() { return city(true); }
-function city(modern: boolean) {
-  const hit = cityCache.get(modern);
-  if (hit) return hit;
+function* cityAsset(modern: boolean): Generator<void, HTMLCanvasElement, unknown> {
   const [c, g] = makeCanvas(640, 360);
   const deck = 228;
   const rim = modern ? '#aabfca' : '#aaa994';
   const lit = modern ? '#e2e9df' : '#e0d9bb';
   const rock: Point[] = [[87, deck], [553, deck], [533, 259], [498, 270], [467, 300], [433, 293],
     [390, 321], [370, 317], [331, 349], [306, 326], [284, 332], [247, 301], [209, 294], [183, 273], [139, 266]];
-  rockTexture(g, rock, '#273b48', '#8e8a73', modern ? 3 : 2);
+  yield* rockTextureGen(g, rock, '#273b48', '#8e8a73', modern ? 3 : 2);
+  yield;
   for (let i = 0; i < 10; i++) {
     const y = deck + 9 + i * 8;
     const w = 400 - i * 33;
@@ -81,6 +78,7 @@ function city(modern: boolean) {
       polygon(g, [[x - 7, top + 35], [x + w + 5, top + 28], [x + w + 5, top + 34], [x - 7, top + 41]], '#a6c8c6');
     }
   });
+  yield;
   for (const [x, w] of [[193, 52], [348, 58], [444, 40]]) {
     ellipse(g, x, deck - 16, w / 2, 24, '#243e49');
     ellipse(g, x, deck - 16, w / 2 - 2, 22, '#9cbfc0');
@@ -93,9 +91,16 @@ function city(modern: boolean) {
   // The expressway wraps around the architecture rather than sitting on its skyline.
   cable(g, [123, deck - 29], [523, deck - 29], 16, '#223e49', 5);
   cable(g, [123, deck - 31], [523, deck - 31], 16, '#c8cfb7', 2);
-  cityCache.set(modern, c);
+  for (const x of [220, 499]) {
+    metal(g, x - 4, deck - 3, 10, 9, '#697f8a', x, 10);
+    px(g, x - 2, deck + 5, 6, 2, '#dae9d6');
+  }
   return c;
 }
+export const aetherCityJob = new Job(() => cityAsset(false));
+export const modernCityJob = new Job(() => cityAsset(true));
+export function getAetherCity() { return modernCityJob.get(); }
+function city(modern: boolean) { return (modern ? modernCityJob : aetherCityJob).peek(); }
 
 function drawSky(ctx: CanvasRenderingContext2D, t: number, pan: number) {
   const sky = skyJob.peek();
@@ -103,6 +108,7 @@ function drawSky(ctx: CanvasRenderingContext2D, t: number, pan: number) {
   else { ctx.fillStyle = '#5a7a8c'; ctx.fillRect(0, 0, 640, 360); }
   const spr = city(false);
   for (const [x, y, s] of [[-100, 94, 0.25], [530, 116, 0.31], [300, 88, 0.18]]) {
+    if (!spr) break;
     ctx.save(); ctx.globalAlpha = 0.22;
     ctx.drawImage(spr, Math.round(x - pan * 0.25), y, Math.round(640 * s), Math.round(360 * s)); ctx.restore();
   }
@@ -115,7 +121,7 @@ function drawSky(ctx: CanvasRenderingContext2D, t: number, pan: number) {
   ctx.globalAlpha = 1;
 }
 
-function industrialSet(kind: 'foundry' | 'workshop' | 'exile' | 'new-aether') {
+function* industrialSet(kind: IndustrialKind): Generator<void, HTMLCanvasElement, unknown> {
   const [c, g] = makeCanvas(720, 360);
   if (kind === 'foundry' || kind === 'workshop') {
     const clean = kind === 'foundry';
@@ -127,6 +133,7 @@ function industrialSet(kind: 'foundry' | 'workshop' | 'exile' | 'new-aether') {
     for (let y = 208, step = 4; y < 360; step *= 1.5, y += step) {
       pixelLine(g, [0, y], [720, y], clean ? '#52636a' : '#605c4c');
     }
+    yield;
     for (let i = 0; i < 6; i++) {
       const x = 15 + i * 127;
       metal(g, x, 51, 113, 156, base, 51 + i, 113);
@@ -144,6 +151,7 @@ function industrialSet(kind: 'foundry' | 'workshop' | 'exile' | 'new-aether') {
       metal(g, x - 4, 19, 7, 189, '#50636c', 4, 7);
       polygon(g, [[x - 4, 22], [x + 21, 43], [x - 4, 52]], '#687f82');
     }
+    yield;
     for (let i = 0; i < 3; i++) {
       pipe(g, [[0, 10 + i * 10], [720, 10 + i * 10]], 3, i === 0 ? '#879c9c' : '#536970');
     }
@@ -178,6 +186,7 @@ function industrialSet(kind: 'foundry' | 'workshop' | 'exile' | 'new-aether') {
       vent(g, x + 4, deck + 27, 22, 16);
       px(g, x + 3, deck + 67, 24, 2, '#253b49');
     }
+    yield;
     for (let x = 116; x < width; x += 34) {
       metal(g, x, deck - 23, 3, 22, '#7b969c', 8, 3);
       px(g, x - 1, deck - 23, 5, 1, '#e8dcc0');
@@ -204,10 +213,11 @@ function label(ctx: CanvasRenderingContext2D, text: string, x: number, y: number
   ctx.textAlign = 'left'; ctx.fillStyle = color; ctx.fillText(text, x, y);
 }
 
-const industrial = new Map<string, HTMLCanvasElement>();
-let yard: HTMLCanvasElement | null = null;
-function outpostYard() {
-  if (yard) return yard;
+type IndustrialKind = 'foundry' | 'workshop' | 'exile' | 'new-aether';
+const industrialJobs = new Map<IndustrialKind, Job<HTMLCanvasElement>>(
+  (['foundry', 'workshop', 'exile', 'new-aether'] as const).map(kind => [kind, new Job(() => industrialSet(kind))])
+);
+const yardJob = new Job(function* () {
   const [c, g] = makeCanvas(720, 84);
   const colors = ['#4a4c40', '#4f5043', '#555547', '#5a5848', '#5c5a49', '#62604d'];
   for (let y = 0; y < 84; y += 2) for (let x = 0; x < 720; x += 2) {
@@ -224,19 +234,28 @@ function outpostYard() {
     const y = hash(i * 4.3) * 84;
     px(g, x, y, 1 + hash(i) * 3, 1, i % 2 ? '#3b4138' : '#a39972');
   }
-  yard = c;
   return c;
-}
+});
 
-function getIndustrial(kind: 'foundry' | 'workshop' | 'exile' | 'new-aether') {
-  let set = industrial.get(kind);
-  if (!set) { set = industrialSet(kind); industrial.set(kind, set); }
-  return set;
+export function storySetJobs(kind: StorySet): Job<unknown>[] {
+  if (kind === 'aether') return [skyJob, aetherCityJob];
+  if (kind === 'new-aether' || kind === 'exile') return [skyJob, modernCityJob, industrialJobs.get(kind)!];
+  if (kind === 'outpost') return [landJob, yardJob];
+  return [industrialJobs.get(kind)!];
 }
-
 export function prepareStorySet(kind: StorySet) {
-  if (kind === 'foundry' || kind === 'workshop' || kind === 'exile' || kind === 'new-aether') getIndustrial(kind);
-  if (kind === 'aether' || kind === 'new-aether' || kind === 'exile') { skyJob.priority = Math.max(skyJob.priority, 10); city(kind !== 'aether'); }
+  for (const job of storySetJobs(kind)) job.priority = Math.max(job.priority, 8);
+}
+function drawIndustrial(ctx: CanvasRenderingContext2D, kind: IndustrialKind, pan: number) {
+  const set = industrialJobs.get(kind)!.peek();
+  if (set) ctx.drawImage(set, -Math.round(pan), 0);
+  else {
+    // Lightweight, opaque stand-in while the prioritized builder finishes.
+    const deck = kind === 'exile' ? 240 : kind === 'new-aether' ? 258 : 270;
+    px(ctx, 0, 0, 640, 360, kind === 'new-aether' || kind === 'exile' ? '#5a7a8c' : '#1b2c35');
+    px(ctx, 0, deck, 640, 360 - deck, '#344b55');
+    px(ctx, 0, deck, 640, 2, '#91a6a5');
+  }
 }
 
 export function drawStorySet(ctx: CanvasRenderingContext2D, kind: StorySet, pan: number, t: number) {
@@ -244,12 +263,17 @@ export function drawStorySet(ctx: CanvasRenderingContext2D, kind: StorySet, pan:
   if (kind === 'aether' || kind === 'new-aether' || kind === 'exile') {
     drawSky(ctx, t, pan);
     if (kind === 'aether') {
-      ctx.drawImage(city(false), Math.round(57 - pan * 0.7), -5);
+      const island = city(false);
+      if (island) ctx.drawImage(island, Math.round(57 - pan * 0.7), -5);
+      else {
+        polygon(ctx, [[140, 223], [610, 223], [550, 270], [380, 340], [220, 280]], '#344653');
+        for (let i = 0; i < 9; i++) px(ctx, 195 + i * 43, 100 - Math.sin(i / 8 * Math.PI) * 65, 30, 123, '#8fa6a6');
+      }
       // Water is drawn separately so its flow never freezes with the cached island.
       for (const x of [220, 499]) {
         for (let i = 0; i < 24; i++) {
-          const y = 226 + ((t * 28 + i * 5) % 112);
-          ctx.globalAlpha = (1 - (y - 226) / 112) * 0.65;
+          const y = 236 + ((t * 28 + i * 5) % 102);
+          ctx.globalAlpha = (1 - (y - 236) / 102) * 0.65;
           px(ctx, x + 57 - pan * 0.7 + Math.sin(i) * 2, y, 2, 4, '#dae9d6');
         }
       }
@@ -266,8 +290,9 @@ export function drawStorySet(ctx: CanvasRenderingContext2D, kind: StorySet, pan:
       metal(ctx, train + 180 - pan * 0.7, yy, 26, 5, '#a0c6c5', 1, 26);
     } else {
       const s = kind === 'exile' ? 0.58 : 0.63;
-      ctx.drawImage(city(true), 267 - Math.round(pan * 0.4), -25, 640 * s, 360 * s);
-      ctx.drawImage(getIndustrial(kind), -Math.round(pan), 0);
+      const island = city(true);
+      if (island) ctx.drawImage(island, 267 - Math.round(pan * 0.4), -25, 640 * s, 360 * s);
+      drawIndustrial(ctx, kind, pan);
       for (const x of [66, 170, 285, 391]) {
         pixelGlow(ctx, x, kind === 'exile' ? 244 : 262, 18, '#b4d4cb', 0.08);
       }
@@ -284,7 +309,9 @@ export function drawStorySet(ctx: CanvasRenderingContext2D, kind: StorySet, pan:
     cable(ctx, [192, 161], [168, 182], 6, '#1b2328');
     cable(ctx, [204, 161], [263, 204], 9, '#1b2328');
     metal(ctx, 0, 268, 720, 9, '#5b6566', 44, 18);
-    ctx.drawImage(outpostYard(), 0, 277);
+    const ground = yardJob.peek();
+    if (ground) ctx.drawImage(ground, 0, 277);
+    else px(ctx, 0, 277, 720, 83, '#4a4c40');
     for (const [x, w] of [[26, 162], [235, 182], [422, 114], [540, 170]]) {
       ctx.globalAlpha = 0.14;
       polygon(ctx, [[x, 276], [x + w, 276], [x + w + 46, 296], [x + 18, 296]], '#0c1b23');
@@ -303,7 +330,7 @@ export function drawStorySet(ctx: CanvasRenderingContext2D, kind: StorySet, pan:
     px(ctx, 392, 207, 2, 6, '#dec99c');
     ctx.restore();
   } else {
-    ctx.drawImage(getIndustrial(kind), -Math.round(pan), 0);
+    drawIndustrial(ctx, kind, pan);
     const clean = kind === 'foundry';
     for (let i = 0; i < 6; i++) {
       const x = 45 + i * 127 - pan;
@@ -342,7 +369,7 @@ export function storyAtmosphere(ctx: CanvasRenderingContext2D, id: string, t: nu
     const settle = easeInOut(clamp(t / duration));
     for (let i = 0; i < 5; i++) {
       const x = 288 + i * 15;
-      const y = (t * 36 + i * 63 - settle * 150) % 360;
+      const y = ((t * 36 + i * 63 - settle * 150) % 360 + 360) % 360;
       px(ctx, x, y, 1, 2, '#667d7d');
     }
   }

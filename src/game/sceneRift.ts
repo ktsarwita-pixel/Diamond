@@ -332,7 +332,9 @@ export function drawCalderaScene(ctx: CanvasRenderingContext2D, t: number) {
   ctx.drawImage(layers.distant, 0, 0);
   water(ctx, t, layers);
   ctx.drawImage(layers.geology, 0, 0);
-  pixelGlow(ctx, CORE[0], CORE[1] + 55, 200, '#d3bc69', 0.15);
+  pixelGlow(ctx, CORE[0], CORE[1] + 55, 200, '#d3bc69', 0.17);
+  pixelGlow(ctx, CORE[0], CORE[1] + 72, 100, '#e5ce83', 0.28 + Math.sin(t * 1.4) * 0.035);
+  pixelGlow(ctx, 1470, 515, 42, '#f0dc96', 0.3);
   for (let i = 0; i < CASCADES.length; i++) {
     const f = CASCADES[i];
     if (f.x >= cam.x - halfWidth - 60 && f.x <= cam.x + halfWidth + 60) cascade(ctx, f, t, i + 2, layers.mist);
@@ -352,7 +354,7 @@ export function drawCalderaScene(ctx: CanvasRenderingContext2D, t: number) {
   ellipse(ctx, walker.x, supportY + 1, 21, 2, 'rgba(2,12,17,0.5)');
   heroRobot(ctx, {
     x: walker.x, y: supportY - 15 * s - 0.55, s, t,
-    state: t < 7.5 ? 'idle' : 'happy', paintMix: 1,
+    state: t < 7.5 ? 'idle' : 'happy', chassisMotion: false, paintMix: 1,
     drill: true, drillAngle: lerp(0.2, -0.45, glance), drillExtend: 0.12,
     drillSpin: 0, wheelPhase: walker.travel * 15.4, eye: t > 7.8 ? 'normal' : 'scan', look: 1,
   });

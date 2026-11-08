@@ -590,7 +590,7 @@ export function drawImpact(ctx: CanvasRenderingContext2D, t: number) {
   // impact flash
   if (after >= 0 && after < 0.25) {
     const k = 1 - after / 0.25;
-    ctx.fillStyle = rgba('#fff6e0', k * 0.95);
+    ctx.fillStyle = rgba('#fff6e0', k * k * 0.9);
     ctx.fillRect(0, 0, CW, CH);
   }
   grade(ctx, '#ff8a4a', 0.16, '#100810', 0.5);

@@ -23,6 +23,11 @@ function detectDefault(): StoryQuality {
 }
 
 let current: StoryQuality = detectDefault();
+let explicitPreference = (() => {
+  try { return localStorage.getItem(KEY) === 'hd' || localStorage.getItem(KEY) === 'lite'; }
+  catch { return false; }
+})();
+export const hasQualityPreference = () => explicitPreference;
 const listeners = new Set<(q: StoryQuality) => void>();
 
 export const isLite = () => current === 'lite';
@@ -32,6 +37,7 @@ export function setQuality(q: StoryQuality, persist = true) {
   if (q === current) return;
   current = q;
   if (persist) {
+    explicitPreference = true;
     try {
       localStorage.setItem(KEY, q);
     } catch {

@@ -638,7 +638,7 @@ export function drawMineScene(ctx: CanvasRenderingContext2D, t: number) {
   const catchPhase = Math.sin(lurch);
   heroRobot(ctx, {
     x,
-    y: GROUND - 15 * 3.6,
+    y: GROUND - 3.6 * (15 * Math.cos(catchPhase * 0.032) + 11 * Math.abs(Math.sin(catchPhase * 0.032))),
     s: 3.6,
     t,
     state: 'sad',
@@ -647,6 +647,7 @@ export function drawMineScene(ctx: CanvasRenderingContext2D, t: number) {
     drill: false,
     look: t > 4.4 ? 1 : 0,
     rot: catchPhase * 0.032,
+    chassisMotion: false,
     paintMix: 1,
     wheelPhase: dist * 18,
     brokenWheel: true,

@@ -225,19 +225,23 @@ export function drawReentry(ctx: CanvasRenderingContext2D, t: number, duration: 
 
   /* ---- clouds rushing upward past the camera ---- */
   const travel = t * 120 + t * t * 34;
-  const pal = heat > 0.45 ? WARM_CLOUD : below > 0.3 ? DUSK_CLOUD : COOL_CLOUD;
+  const warmMix = smooth(0.18, 0.8, heat);
   const cloudA = smooth(0.8, 2.2, t);
   if (cloudA > 0) {
     for (let i = 0; i < 9; i++) {
       const depth = 0.5 + hash(i + 3) * 0.9;
       const w = Math.round(110 * depth);
       const h = Math.round(42 * depth);
-      const spr = cloudSprite(i * 11 + 5, w, h, pal[0], pal[1], pal[2]);
       const span = CH + 260;
       const y = ((((hash(i * 5.1) * span - travel * depth) % span) + span) % span) - 120;
       const x = hash(i * 9.7) * (CW + 120) - 60;
-      ctx.globalAlpha = cloudA * (0.5 + depth * 0.35) * (1 - below * 0.5);
-      ctx.drawImage(spr, Math.round(x), Math.round(y));
+      const alpha = cloudA * (0.5 + depth * 0.35) * (1 - below * 0.5);
+      // Crossfade cached palettes instead of recolouring every cloud on one frame.
+      for (const [palette, weight] of [[COOL_CLOUD, 1], [WARM_CLOUD, warmMix], [DUSK_CLOUD, below]] as const) {
+        if (weight <= 0.005) continue;
+        ctx.globalAlpha = alpha * weight;
+        ctx.drawImage(cloudSprite(i * 11 + 5, w, h, palette[0], palette[1], palette[2]), Math.round(x), Math.round(y));
+      }
     }
     ctx.globalAlpha = 1;
   }
@@ -326,7 +330,10 @@ export function drawReentry(ctx: CanvasRenderingContext2D, t: number, duration: 
     const px = rx + wx * life * 190 - wy * lat;
     const py = ry + wy * life * 190 + wx * lat;
     const white = life < 0.35 && paint < 0.75;
+    ctx.save();
+    ctx.globalAlpha = smooth(0, 0.1, life) * (1 - smooth(0.65, 1, life));
     R(ctx, px, py, 2, 2, white ? '#f1f5f9' : i % 2 ? '#fb923c' : '#fde047');
+    ctx.restore();
   }
 
   /* ---- cloud deck punch-through ---- */

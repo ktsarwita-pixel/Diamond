@@ -1,5 +1,5 @@
 import { clamp, glowAt, heroRobot, mix, shade } from './cutsceneArt';
-import { makeCanvas } from './cineKit';
+import { Job, makeCanvas } from './cineKit';
 import { isLite, qn } from './quality';
 import { cable, ellipse, gear, metal, pixelLine, polygon, px, windowGrid, type Point } from './pixelCraft';
 
@@ -10,9 +10,7 @@ const AMBER = ['#6e3f18', '#b9772e', '#eab35a', '#ffdc96', '#fff6da'] as const;
 const smoother = (x: number) => { const t = clamp(x); return t * t * t * (t * (t * 6 - 15) + 10); };
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 
-let backdrop: HTMLCanvasElement | null = null;
-function getBackdrop() {
-  if (backdrop) return backdrop;
+export const workshopJob = new Job(function* (): Generator<void, HTMLCanvasElement, unknown> {
   const [c, g] = makeCanvas(720, 360);
   px(g, 0, 0, 720, 360, '#141c22');
   // rear wall panels
@@ -24,6 +22,7 @@ function getBackdrop() {
     windowGrid(g, x, 66, 96, 52, '#8fb6bd');
     px(g, x - 4, 120, 104, 4, STEEL[1]);
   }
+  yield;
   // ceiling trusses and service pipes
   for (const y of [18, 30]) {
     px(g, 0, y, 720, 5, INK);
@@ -51,6 +50,7 @@ function getBackdrop() {
   for (const x of [82, 206]) metal(g, x, 176, 6, 116, STEEL[2], x, 6);
   for (const y of [206, 246, 284]) { metal(g, 80, y, 134, 5, STEEL[3], y, 134); }
   pixelLine(g, [88, 180], [206, 284], STEEL[1]);
+  yield;
   // pegboard + tool cabinet (right)
   metal(g, 430, 140, 130, 84, '#2d3a36', 9, 130);
   for (let x = 438; x < 556; x += 8) for (let y = 148; y < 220; y += 8) px(g, x, y, 1, 1, '#141c18');
@@ -61,9 +61,8 @@ function getBackdrop() {
   metal(g, 606, 150, 70, 100, '#233039', 13, 70);
   px(g, 614, 160, 54, 60, '#101a20');
   px(g, 616, 162, 50, 2, '#7dd3fc');
-  backdrop = c;
   return c;
-}
+});
 
 interface Key { t: number; x: number; y: number }
 const PATH: Key[] = [
@@ -132,7 +131,13 @@ export function drawWorkshopScene(ctx: CanvasRenderingContext2D, t: number) {
   ctx.translate(326, 230);
   ctx.scale(push, push);
   ctx.translate(-326, -230);
-  ctx.drawImage(getBackdrop(), -24, 0);
+  const backdrop = workshopJob.peek();
+  if (backdrop) ctx.drawImage(backdrop, -24, 0);
+  else {
+    px(ctx, -24, 0, 720, 360, '#1b2830');
+    px(ctx, -24, 292, 720, 68, '#3a3833');
+    px(ctx, -24, 292, 720, 2, '#6d675a');
+  }
   const lite = isLite();
   const [gx, gy] = gripAt(t);
   const benchY = 278;

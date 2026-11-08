@@ -1,10 +1,14 @@
 import { clamp, hash, mix, shade } from './cutsceneArt';
 import { makeCanvas, makeNoise, sliceTimer, type Noise } from './cineKit';
+import { cacheGet, cacheSet } from './spriteCache';
 
 export type Point = readonly [number, number];
 export const px = (ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, color: string) => {
+  if (w <= 0 || h <= 0) return;
+  const left = Math.round(x), top = Math.round(y);
+  const right = Math.round(x + w), bottom = Math.round(y + h);
   ctx.fillStyle = color;
-  ctx.fillRect(Math.round(x), Math.round(y), Math.max(1, Math.round(w)), Math.max(1, Math.round(h)));
+  ctx.fillRect(left, top, Math.max(1, right - left), Math.max(1, bottom - top));
 };
 
 export function pixelLine(ctx: CanvasRenderingContext2D, a: Point, b: Point, color: string, width = 1) {
@@ -29,22 +33,25 @@ export function pixelLine(ctx: CanvasRenderingContext2D, a: Point, b: Point, col
 
 /** Scan conversion keeps silhouettes crisp even at non-axis-aligned edges. */
 export function polygon(ctx: CanvasRenderingContext2D, points: readonly Point[], color: string) {
-  const top = Math.ceil(Math.min(...points.map(p => p[1])));
-  const bottom = Math.floor(Math.max(...points.map(p => p[1])));
+  // Sample pixel centres so fractional contours retain their first/last row.
+  const top = Math.ceil(Math.min(...points.map(p => p[1])) - 0.5);
+  const bottom = Math.floor(Math.max(...points.map(p => p[1])) - 0.5);
   ctx.fillStyle = color;
   for (let y = top; y <= bottom; y++) {
     const hits: number[] = [];
     for (let i = 0; i < points.length; i++) {
       const a = points[i];
       const b = points[(i + 1) % points.length];
-      if ((a[1] <= y && b[1] > y) || (b[1] <= y && a[1] > y)) {
-        hits.push(a[0] + (y - a[1]) * (b[0] - a[0]) / (b[1] - a[1]));
+      const scanY = y + 0.5;
+      if ((a[1] <= scanY && b[1] > scanY) || (b[1] <= scanY && a[1] > scanY)) {
+        hits.push(a[0] + (scanY - a[1]) * (b[0] - a[0]) / (b[1] - a[1]));
       }
     }
     hits.sort((a, b) => a - b);
     for (let i = 0; i < hits.length - 1; i += 2) {
-      const x = Math.ceil(hits[i]);
-      ctx.fillRect(x, y, Math.max(1, Math.floor(hits[i + 1]) - x + 1), 1);
+      const x = Math.ceil(hits[i] - 0.5);
+      const width = Math.ceil(hits[i + 1] - 0.5) - x;
+      if (width > 0) ctx.fillRect(x, y, width, 1);
     }
   }
 }
@@ -191,7 +198,7 @@ export function rockTexture(ctx: CanvasRenderingContext2D, points: readonly Poin
 
 const fogCache = new Map<string, HTMLCanvasElement>();
 export function pixelGlow(ctx: CanvasRenderingContext2D, x: number, y: number, radius: number, color: string, alpha: number) {
-  let sprite = fogCache.get(color);
+  let sprite = cacheGet(fogCache, color);
   if (!sprite) {
     const [c, g] = makeCanvas(64, 64);
     const b = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
@@ -203,11 +210,11 @@ export function pixelGlow(ctx: CanvasRenderingContext2D, x: number, y: number, r
       px(g, xx, yy, 1, 1, color);
     }
     sprite = c;
-    fogCache.set(color, c);
+    cacheSet(fogCache, color, c, 64);
   }
   ctx.save();
   ctx.globalCompositeOperation = 'lighter';
-  ctx.globalAlpha = alpha;
+  ctx.globalAlpha *= clamp(alpha);
   ctx.drawImage(sprite, Math.round(x - radius), Math.round(y - radius), Math.round(radius * 2), Math.round(radius * 2));
   ctx.restore();
 }

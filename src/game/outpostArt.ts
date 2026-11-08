@@ -13,6 +13,7 @@
 import { clamp, hash, mix, shade } from './cutsceneArt';
 import { makeCanvas } from './cineKit';
 import { pixelLine, polygon, type Point } from './pixelCraft';
+import { cacheGet, cacheSet } from './spriteCache';
 
 export type BuildingKind = 'refinery' | 'forge' | 'repair' | 'shaft' | 'habitat';
 export interface BuildingOptions {
@@ -57,6 +58,8 @@ function motionState(id: string, t: number, active: boolean, doorTarget: number)
   return { s, dt, easeTo };
 }
 /** Footprint used by the engine to cull off-screen buildings before animating them. */
+export const HABITAT_OPENING = { left: 50, top: -58, width: 36, height: 58 } as const;
+
 export const BUILDING_BOUNDS: Record<BuildingKind, { left: number; right: number; top: number }> = {
   refinery: { left: -32, right: 164, top: -176 },
   forge: { left: -24, right: 152, top: -120 },
@@ -89,11 +92,11 @@ const CANVAS_H = 360; // tall enough for the shaft guides that run into the hole
 /*  Primitive helpers                                                  */
 /* ------------------------------------------------------------------ */
 function R(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, c: string) {
-  w = Math.round(w);
-  h = Math.round(h);
+  const left = Math.round(x), top = Math.round(y);
+  w = Math.round(x + w) - left; h = Math.round(y + h) - top;
   if (w <= 0 || h <= 0) return;
   ctx.fillStyle = c;
-  ctx.fillRect(Math.round(x), Math.round(y), w, h);
+  ctx.fillRect(left, top, w, h);
 }
 
 /** Ink outline + bevelled fill. */
@@ -932,6 +935,15 @@ export function buildingSprite(kind: BuildingKind, tier: number): HTMLCanvasElem
 /** Continuous smoke plume: overlapping puffs (always starting inside the mouth)
  *  are drawn opaque off-screen, then composited once so density stays even. */
 const plumeLayer = makeCanvas(96, 96);
+const smokeDiscs = new Map<string, HTMLCanvasElement>();
+function smokeDisc(rx: number, ry: number, color: string) {
+  const key = `${rx}:${ry}:${color}`;
+  const hit = cacheGet(smokeDiscs, key);
+  if (hit) return hit;
+  const [c, g] = makeCanvas(rx * 2 + 1, ry * 2 + 1);
+  ellipseFill(g, rx, ry, rx, ry, color);
+  return cacheSet(smokeDiscs, key, c, 192);
+}
 function plume(ctx: CanvasRenderingContext2D, x: number, y: number, t: number, seed: number, strength: number, light: string, dark: string) {
   const [layer, g] = plumeLayer;
   g.clearRect(0, 0, 96, 96);
@@ -946,12 +958,15 @@ function plume(ctx: CanvasRenderingContext2D, x: number, y: number, t: number, s
     const r = 2.5 + k * 9;
     const cx = ox + s * 0.42 + Math.sin(t * 1.1 + s * 0.09 + seed) * k * 5;
     const cy = oy - 1 - s * 0.85;
-    ellipseFill(g, Math.round(cx), Math.round(cy), Math.round(r), Math.round(r * 0.8), mix(light, dark, k));
-    ellipseFill(g, Math.round(cx - r * 0.25), Math.round(cy - r * 0.3), Math.max(1, Math.round(r * 0.5)), Math.max(1, Math.round(r * 0.35)), mix(light, '#ffffff', 0.15 * (1 - k)));
+    const rr = Math.round(r), rh = Math.round(r * 0.8);
+    const hr = Math.max(1, Math.round(r * 0.5)), hh = Math.max(1, Math.round(r * 0.35));
+    g.drawImage(smokeDisc(rr, rh, mix(light, dark, Math.round(k * 12) / 12)), Math.round(cx) - rr, Math.round(cy) - rh);
+    g.drawImage(smokeDisc(hr, hh, mix(light, '#ffffff', Math.round((1 - k) * 12) / 12 * 0.15)), Math.round(cx - r * 0.25) - hr, Math.round(cy - r * 0.3) - hh);
   }
-  ctx.globalAlpha = clamp(strength, 0, 0.7);
+  const alpha = ctx.globalAlpha;
+  ctx.globalAlpha = alpha * clamp(strength, 0, 0.7);
   ctx.drawImage(layer, x - ox, y - oy);
-  ctx.globalAlpha = 1;
+  ctx.globalAlpha = alpha;
 }
 
 /** Soft light pool / cone (solid contiguous shape, low alpha). */

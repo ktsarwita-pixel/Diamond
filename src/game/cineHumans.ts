@@ -5,6 +5,7 @@
  * ================================================================== */
 import { INK, R, clamp, mix as mixColor, shade as shadeColor, type HeroHumanOpts } from './cutsceneArt';
 import { drawBlob } from './cineKit';
+import { cacheGet, cacheSet } from './spriteCache';
 
 export type Outfit = 'default' | 'miner' | 'aether' | 'official';
 
@@ -18,6 +19,8 @@ export interface CineHumanOpts extends HeroHumanOpts {
   lampOn?: boolean;
   /** Extra uniform darkening 0..1 (atmospheric depth). */
   dim?: number;
+  /** Continuous 0..1 extension for the offered-core reach pose. */
+  reachProgress?: number;
 }
 
 // Character palettes repeat on every cinematic and gameplay animation frame.
@@ -109,7 +112,8 @@ function paintCinematicHuman(ctx: CanvasRenderingContext2D, o: CineHumanOpts) {
     frontArm = [2.65, 3.0 + Math.sin(t * 11) * 0.22];
     backArm = [2.5, 2.95 + Math.sin(t * 11 + 1) * 0.22];
   } else if (pose === 'reach') {
-    frontArm = [1.32, 1.56];
+    const p = clamp(o.reachProgress ?? 1);
+    frontArm = [0.06 + (1.32 - 0.06) * p, 0.22 + (1.56 - 0.22) * p];
   } else if (pose === 'point') {
     frontArm = [1.45, 1.52];
   } else if (pose === 'kneel') {
@@ -272,7 +276,7 @@ function paintCinematicHuman(ctx: CanvasRenderingContext2D, o: CineHumanOpts) {
 
   /* ---------------- torso ---------------- */
   ctx.save();
-  const lean = (pose === 'reach' || pose === 'point' ? 0.1 : pose === 'walk' ? 0.05 : 0) + sway * 0.5;
+  const lean = (pose === 'reach' ? 0.1 * clamp(o.reachProgress ?? 1) : pose === 'point' ? 0.1 : pose === 'walk' ? 0.05 : 0) + sway * 0.5;
   ctx.translate(0, HIP_Y);
   ctx.rotate(lean);
   ctx.translate(0, -HIP_Y + breathe * 0.4);
@@ -658,10 +662,10 @@ function paintCinematicHuman(ctx: CanvasRenderingContext2D, o: CineHumanOpts) {
 const humanIds = new WeakMap<object, number>();
 let nextHumanId = 1;
 const cinematicFrames = new Map<string, HTMLCanvasElement>();
-const FRAME_ORIGIN_X = 24;
-const FRAME_GROUND_Y = 70;
-const FRAME_W = 80;
-const FRAME_H = 76;
+const FRAME_ORIGIN_X = 32;
+const FRAME_GROUND_Y = 86;
+const FRAME_W = 96;
+const FRAME_H = 96;
 
 /** Draw a cached pose frame; humans have discrete pixel-art joints by design. */
 export function cinematicHuman(ctx: CanvasRenderingContext2D, o: CineHumanOpts) {
@@ -696,9 +700,13 @@ export function cinematicHuman(ctx: CanvasRenderingContext2D, o: CineHumanOpts) 
   }
   const scale = (o.s ?? 3) * 0.5 * (look.small ? 0.8 : 1);
   const dim = Math.round(clamp(o.dim ?? 0) * 20) / 20;
-  const key = [id, pose, frame, Math.round(scale * 100), o.outfit ?? '', o.rim ?? '',
-    o.silhouette ?? '', dim, o.flipProp ?? '', o.talking ? 1 : 0, o.lampOn ? 1 : 0].join(':');
-  let sprite = cinematicFrames.get(key);
+  const reachProgress = pose === 'reach' ? Math.round(clamp(o.reachProgress ?? 1) * 24) / 24 : 1;
+  // The source sprite is always painted at s=2. Destination scale belongs on
+  // the transform, not in the cache key (continuous doorway depth used to mint
+  // hundreds of identical atlases and evict the entire cast).
+  const key = [id, pose, frame, o.outfit ?? '', o.rim ?? '',
+    o.silhouette ?? '', dim, o.flipProp ?? '', o.talking ? 1 : 0, o.lampOn ? 1 : 0, reachProgress].join(':');
+  let sprite = cacheGet(cinematicFrames, key);
   if (!sprite) {
     sprite = document.createElement('canvas');
     sprite.width = FRAME_W;
@@ -712,10 +720,10 @@ export function cinematicHuman(ctx: CanvasRenderingContext2D, o: CineHumanOpts) 
       s: 2,
       t: frameTime,
       walkPhase: pose === 'walk' ? frame / frameCount * Math.PI * 2 / 1.75 : 0,
+      reachProgress,
       facing: 1,
     });
-    if (cinematicFrames.size > 420) cinematicFrames.clear();
-    cinematicFrames.set(key, sprite);
+    cacheSet(cinematicFrames, key, sprite, 384);
   }
   const facing = o.facing ?? 1;
   ctx.save();
@@ -751,14 +759,9 @@ export function humanThroughDoorway(ctx: CanvasRenderingContext2D, d: DoorwayOpt
   const inside = d.k < 1;
   const gloom = d.gloom ?? '#0b1016';
 
-  // Quantise the emergence into a few discrete depth steps. The pose cache is
-  // keyed on the sprite scale, so a continuously varying scale would mint a new
-  // 80x76 sprite every frame per walker and thrash the cache (which then clears
-  // wholesale). Six steps keeps the whole shelter exit to ~7 cached frames.
-  const STEPS = 6;
-  const kq = inside ? Math.round(clamp(d.k) * STEPS) / STEPS : 1;
-  const depth = inside ? 1 - (1 - kq) * 0.28 : 1; // 72% size when deepest
-  const recede = inside ? 1 - kq : 0;
+  // Depth is continuous now that scale is independent of the pose cache.
+  const depth = inside ? 1 - (1 - clamp(d.k)) * 0.28 : 1;
+  const recede = inside ? 1 - clamp(d.k) : 0;
 
   ctx.save();
   if (inside) {
@@ -858,7 +861,7 @@ export function drawWorldHuman(ctx: CanvasRenderingContext2D, id: string, x: num
   const count = pose === 'walk' ? 12 : 8;
   const frame = Math.floor(Math.abs(phase) * (pose === 'walk' ? 15 : pose === 'wave' ? 8 : 3)) % count;
   const key = `${id}:${look.shirt}:${look.helmet}:${pose}:${frame}:${prop}:${talking}`;
-  let sprite = worldFrames.get(key);
+  let sprite = cacheGet(worldFrames, key);
   if (!sprite) {
     sprite = document.createElement('canvas');
     sprite.width = 112;
@@ -872,8 +875,7 @@ export function drawWorldHuman(ctx: CanvasRenderingContext2D, id: string, x: num
       look, pose, facing: 1, flipProp: prop, talking,
       rim: '#d5ac76', lampOn: true,
     });
-    if (worldFrames.size > 350) worldFrames.clear();
-    worldFrames.set(key, sprite);
+    cacheSet(worldFrames, key, sprite, 320);
   }
   ctx.save();
   ctx.translate(Math.round(x), Math.round(groundY));

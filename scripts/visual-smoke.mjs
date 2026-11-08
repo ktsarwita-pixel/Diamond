@@ -44,11 +44,11 @@ try {
   const report = await page.evaluate(async () => {
     const { CUTSCENE, prepareScene } = await import('/src/game/cutscene.ts');
     const { scientistDepartureAt, disposalPoseAt } = await import('/src/game/cutscene.ts');
-    const { DISPOSAL_DURATION, disposalJob } = await import('/src/game/sceneDisposal.ts');
+    const { DISPOSAL_DURATION, disposalJob, disposalCameraAt } = await import('/src/game/sceneDisposal.ts');
     const { calderaWalkerAt, calderaJob, riftGeometry, riftCameraAt } = await import('/src/game/sceneCaldera.ts');
     const { polygon, resolvePixelFrame, rockTextureGen } = await import('/src/game/pixelCraft.ts');
     const { drawBuilding } = await import('/src/game/outpostArt.ts');
-    const { drawWorldHuman } = await import('/src/game/cineHumans.ts');
+    const { drawWorldHuman, cinematicHuman } = await import('/src/game/cineHumans.ts');
     const { CHARACTERS } = await import('/src/game/characters.ts');
     const { GameEngine } = await import('/src/game/engine.ts');
     const { heroRobot } = await import('/src/game/cutsceneArt.ts');
@@ -197,6 +197,17 @@ try {
     const beforeRelease = disposalPoseAt(7.95 - 0.00001), afterRelease = disposalPoseAt(7.95 + 0.00001);
     const disposalContinuity = Math.hypot(beforeRelease.x - afterRelease.x, beforeRelease.y - afterRelease.y);
     const disposalBuilt = disposalJob.ready;
+    const disposalFraming = Array.from({ length: 38 }, (_, i) => {
+      const t = 7.95 + i * 0.05, pose = disposalPoseAt(t), cam = disposalCameraAt(t);
+      return { t, x: (pose.x - cam.x) * cam.zoom + 320, y: (pose.y - cam.y) * cam.zoom + 180 };
+    });
+    const disposalSky = disposalJob.peek();
+    const reachFrames = [0.15, 0.55, 1].map((reachProgress) => {
+      g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, 640, 360);
+      cinematicHuman(g, { x: 120, y: 270, s: 3, t: 2, look: CHARACTERS.mara.look, pose: 'reach', reachProgress });
+      return digest();
+    });
+    const fontsLoaded = document.fonts.check('8px "Press Start 2P"') && document.fonts.check('20px "VT323"');
     const calderaSupport = [0, 1, 4, 7, 12, 17].map((t) => ({ t, ...calderaWalkerAt(t) }));
 
     // Record the ACTUAL track housing transform used by the renderer. Test every
@@ -279,7 +290,9 @@ try {
       },
       stones, missingStonePixels, maxCameraZoomStep: Math.max(...cameraSteps),
       boulderSupport, renderedRockComponents, renderedLedgeComponents,
-      disposalMotion, disposalContinuity, disposalBuilt,
+      disposalMotion, disposalContinuity, disposalBuilt, disposalFraming,
+      disposalSky: disposalSky ? { width: disposalSky.sky.width, height: disposalSky.sky.height } : null,
+      reachFrames, fontsLoaded,
     };
   });
   assert.equal(report.sceneResults.length, 12);
@@ -295,7 +308,11 @@ try {
   for (const rock of report.boulderSupport) assert.ok(rock.seated && rock.embed >= 0 && rock.embed <= 1.1, 'A boulder floats above its bench');
   assert.equal(report.renderedRockComponents, 1, 'Detached rock or mineral pixels in the final cliff layer');
   assert.equal(report.renderedLedgeComponents, 1, 'Detached rock fragments beside the walking ledge');
-  assert.ok(report.disposalBuilt && report.disposalContinuity < 0.01, 'Disposal shot fails to load or jumps at release');
+  assert.ok(report.disposalBuilt && report.disposalContinuity < 0.01, `Disposal shot fails to load or jumps at release: ${JSON.stringify({ built: report.disposalBuilt, gap: report.disposalContinuity })}`);
+  for (const f of report.disposalFraming) assert.ok(f.x > 45 && f.x < 595 && f.y > 35 && f.y < 325, `Falling CUBE-07 leaves the disposal frame at ${f.t}s: ${JSON.stringify(f)}`);
+  assert.ok(report.disposalSky && report.disposalSky.width >= 1280 && report.disposalSky.height >= 960, 'Disposal fall exposes uncovered sky');
+  assert.equal(new Set(report.reachFrames).size, 3, 'The offered-core reach must extend continuously');
+  assert.ok(report.fontsLoaded, 'Bundled pixel fonts must be available before cached text renders');
   for (const pose of report.disposalMotion) {
     assert.ok(pose.trackFront < pose.edge, `Sweeper drives off the platform at ${pose.t}s`);
     if (pose.contactGap !== undefined) assert.ok(Math.abs(pose.contactGap) < 0.01, `Plow loses contact while pushing at ${pose.t}s`);

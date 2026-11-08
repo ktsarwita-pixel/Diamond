@@ -97,9 +97,10 @@ export function drawScientistDeparture(ctx: CanvasRenderingContext2D, t: number)
   const pose = scientistDepartureAt(t);
   // Continuous deck and guideway: neither ends underneath a person.
   metal(ctx, 0, FLOOR, 720, 9, '#a0b3b1', 12, 30);
-  metal(ctx, 407, 133, 313, 7, '#506e7d', 7, 36);
-  px(ctx, 408, 134, 312, 1, '#cfdbcf');
-  for (const x of [407, 618]) {
+  // The guideway continues beyond the shot: the moving bogies never out-run it.
+  metal(ctx, 407, 133, 617, 7, '#506e7d', 7, 36);
+  px(ctx, 408, 134, 616, 1, '#cfdbcf');
+  for (const x of [407, 618, 829]) {
     metal(ctx, x, 140, 5, 118, '#3c5867', x, 5);
     polygon(ctx, [[x + 5, 140], [x + 24, 140], [x + 5, 160]], '#718994');
   }

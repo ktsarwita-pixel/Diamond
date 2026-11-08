@@ -1,6 +1,6 @@
 import { clamp, hash, heroRobot, mix } from './cutsceneArt';
 import { Job, makeCanvas } from './cineKit';
-import { getAetherCity } from './storyWorlds';
+import { modernCityJob } from './storyWorlds';
 import { qn } from './quality';
 import { cable, ellipse, metal, pipe, pixelGlow, pixelLine, polygon, px } from './pixelCraft';
 
@@ -65,15 +65,23 @@ export function disposalPoseAt(t: number) {
 interface DisposalSet { sky: HTMLCanvasElement; bay: HTMLCanvasElement; foreground: HTMLCanvasElement; }
 
 export const disposalJob = new Job(function* (): Generator<unknown, DisposalSet, unknown> {
-  const [sky, s] = makeCanvas(1024, 640);
-  for (let y = 0; y < 640; y++) {
+  const [sky, s] = makeCanvas(1280, 960);
+  for (let y = 0; y < 960; y++) {
     const k = clamp(y / 440);
-    px(s, 0, y, 1024, 1, mix('#102838', '#d1b790', k * k * 0.68 + k * 0.32));
+    px(s, 0, y, sky.width, 1, mix('#102838', '#d1b790', k * k * 0.68 + k * 0.32));
     if (y % 20 === 0) yield;
   }
   pixelGlow(s, 813, 240, 210, '#f2d39e', 0.22);
   ellipse(s, 813, 241, 23, 22, '#e9d8ae');
-  const city = getAetherCity();
+  // A dependency must outrank its consumer, otherwise the priority scheduler
+  // would keep stepping this job while the city stayed permanently unbuilt.
+  modernCityJob.priority = Math.max(modernCityJob.priority, 11);
+  while (!modernCityJob.ready) {
+    // Also make progress if this job is ever finished synchronously via get().
+    modernCityJob.step(performance.now() + 0.75);
+    yield;
+  }
+  const city = modernCityJob.peek()!;
   s.save(); s.globalAlpha = 0.65;
   s.drawImage(city, 336, -19, 510, 287);
   s.restore();
@@ -84,7 +92,7 @@ export const disposalJob = new Job(function* (): Generator<unknown, DisposalSet,
   // Stratified cloud sea, far below the edge of the disposal deck.
   for (let i = 0; i < 23; i++) {
     const x = -100 + hash(i * 5.1) * 1220;
-    const y = 275 + hash(i * 7.3) * 280;
+    const y = 275 + hash(i * 7.3) * 610;
     const r = 52 + hash(i * 1.9) * 92;
     s.globalAlpha = 0.17 + (i % 3) * 0.035;
     ellipse(s, x, y, r, r * 0.15, i % 3 ? '#ced6ca' : '#8fa9ae');
@@ -174,6 +182,15 @@ export const disposalJob = new Job(function* (): Generator<unknown, DisposalSet,
   return { sky, bay, foreground };
 });
 
+let shutter: HTMLCanvasElement | null = null;
+function rollerShutter() {
+  if (shutter) return shutter;
+  const [c, g] = makeCanvas(DOOR.right - DOOR.left, FLOOR - DOOR.top);
+  for (let y = 0; y < c.height; y++) px(g, 0, y, c.width, 1,
+    y % 7 === 0 ? '#829b9f' : y % 7 === 6 ? '#1d3543' : '#455f6c');
+  shutter = c;
+  return c;
+}
 let sweeperBody: HTMLCanvasElement | null = null;
 function getSweeper() {
   if (sweeperBody) return sweeperBody;
@@ -276,7 +293,14 @@ function sweeper(ctx: CanvasRenderingContext2D, pose: ReturnType<typeof disposal
 export function disposalCameraAt(t: number) {
   const push = glide((t - PUSH) / (TIP - PUSH));
   const follow = glide((t - RELEASE) / 1.5);
-  return { x: 340 + push * 70 + follow * 60, y: 253 + follow * 146, zoom: 0.92 + push * 0.04 - follow * 0.055 };
+  const falling = disposalPoseAt(t);
+  // Track the actual ballistic pose, not a fixed offset that left CUBE-07 below
+  // the frame throughout the final beat. Quintic follow starts at zero velocity.
+  return {
+    x: lerp(340 + push * 70, falling.x - 70, follow),
+    y: lerp(253, falling.y + 30, follow),
+    zoom: 0.92 + push * 0.04 - follow * 0.09,
+  };
 }
 
 export function drawDisposalScene(ctx: CanvasRenderingContext2D, t: number) {
@@ -310,10 +334,8 @@ export function drawDisposalScene(ctx: CanvasRenderingContext2D, t: number) {
   // The roller door draws in front of the machine but cannot move through it.
   const doorHeight = Math.round((1 - p.door) * (FLOOR - DOOR.top));
   if (doorHeight > 0) {
-    for (let yy = 0; yy < doorHeight; yy++) {
-      px(ctx, DOOR.left, DOOR.top + yy, DOOR.right - DOOR.left, 1,
-        yy % 7 === 0 ? '#829b9f' : yy % 7 === 6 ? '#1d3543' : '#455f6c');
-    }
+    ctx.drawImage(rollerShutter(), 0, 0, DOOR.right - DOOR.left, doorHeight,
+      DOOR.left, DOOR.top, DOOR.right - DOOR.left, doorHeight);
     px(ctx, DOOR.left, DOOR.top + doorHeight - 4, DOOR.right - DOOR.left, 4, '#243a47');
     for (let x = DOOR.left; x < DOOR.right; x += 13) px(ctx, x, DOOR.top + doorHeight - 3, 7, 2, '#d1ae58');
   }

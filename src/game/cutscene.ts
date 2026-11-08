@@ -31,8 +31,9 @@ import { drawMineScene, mineJob } from './sceneMine';
 import { drawShaftScene, shaftJob } from './sceneCaves';
 import { CALDERA_DURATION, calderaJob, drawCalderaScene } from './sceneCaldera';
 import type { Job } from './cineKit';
-import { drawStorySet, prepareStorySet, storyAtmosphere, type StorySet } from './storyWorlds';
-import { drawWorkshopScene } from './sceneWorkshop';
+import { drawStorySet, prepareStorySet, storyAtmosphere, storySetJobs, type StorySet } from './storyWorlds';
+import { drawWorkshopScene, workshopJob } from './sceneWorkshop';
+import { HABITAT_OPENING } from './outpostArt';
 import { DEPARTURE_DURATION, drawScientistDeparture } from './sceneDeparture';
 export { scientistDepartureAt } from './sceneDeparture';
 import { DISPOSAL_DURATION, disposalJob, drawDisposalScene } from './sceneDisposal';
@@ -352,7 +353,7 @@ export const CUTSCENE: CutsceneScene[] = [
   {
     id: 'self-repair',
     chapter: '08 / BUILT AGAIN',
-    set: 'workshop',
+    set: null,
     duration: 9.6,
     text: 'Using the workshop gantry and hydraulic cradle, CUBE-07 bolted on spare armor and a heavy mining drill.',
     sfx: 'weld',
@@ -379,11 +380,11 @@ export const CUTSCENE: CutsceneScene[] = [
       // comes out THROUGH that opening: each walker is born deep inside the
       // gloom, recedes-in-reverse toward the threshold (humanThroughDoorway),
       // then walks free on the deck.
-      const doorL = 243 + 50 - pan;
-      const doorW = 36;
+      const doorL = 243 + HABITAT_OPENING.left - pan;
+      const doorW = HABITAT_OPENING.width;
       const doorC = doorL + doorW / 2;
       const sill = 268;
-      const doorway = { left: doorL, top: sill - 61, width: doorW, height: 61, sill, gloom: '#0d0a08' };
+      const doorway = { left: doorL, top: sill + HABITAT_OPENING.top, width: doorW, height: HABITAT_OPENING.height, sill, gloom: '#0d0a08' };
       // Emergence timeline for one walker: `tt` seconds since it was cued.
       //   0.00–0.55  rising out of the interior (k 0→1), at the door centre
       //   0.55+      walking from the threshold to `target`
@@ -458,7 +459,7 @@ export const CUTSCENE: CutsceneScene[] = [
       });
 
       if (t > 4.2 && t < 6.7) {
-        const appear = ease((t - 4.2) / 0.22);
+        const appear = ease((t - 4.2) / 0.22) * (1 - ease((t - 6.35) / 0.35));
         ctx.save();
         ctx.globalAlpha = appear;
         R(ctx, 392, 136, 148, 34, '#110d14');
@@ -487,10 +488,9 @@ export const CUTSCENE: CutsceneScene[] = [
       camera(ctx, -32, -20, 1.06 + ease(t / 7.2) * 0.06, () => {
         drawStorySet(ctx, 'outpost', 38, t);
 
-        // Bunker (habitat) opening in this framing: set x=243+50..86, pan 38 → screen 255..291.
-        // Onlookers stand just inside the doorway (k≈0.6–0.85): clipped, receded, dimmed.
-        const doorL = 243 + 50 - 38;
-        const dw = { left: doorL, top: 268 - 61, width: 36, height: 61, sill: 268, gloom: '#0d0a08' };
+        // Share the actual doorway bounds with the building renderer.
+        const doorL = 243 + HABITAT_OPENING.left - 38;
+        const dw = { left: doorL, top: 268 + HABITAT_OPENING.top, width: HABITAT_OPENING.width, height: HABITAT_OPENING.height, sill: 268, gloom: '#0d0a08' };
         for (let i = 0; i < 3; i++) {
           // They ease forward to the threshold as the pact is made.
           const k = lerp(0.62 - i * 0.12, 0.86 - i * 0.08, easeInOut(clamp((t - 2.6) / 1.4)));
@@ -512,7 +512,7 @@ export const CUTSCENE: CutsceneScene[] = [
 
         // Mara steps forward smoothly (t = 0.3..1.5s) and extends the glowing power module (`pose: 'reach'`)
         const stepIn = easeInOut(clamp((t - 0.25) / 1.25));
-        const maraX = lerp(332, 368, stepIn);
+        const maraX = lerp(332, 363, stepIn);
         const reach = ease(clamp((t - 1.35) / 1.1));
         cinematicHuman(ctx, {
           x: maraX,
@@ -521,7 +521,8 @@ export const CUTSCENE: CutsceneScene[] = [
           rim: '#ffe2a8',
           t,
           look: human('mara'),
-          pose: stepIn < 1 ? 'walk' : reach > 0.3 ? 'reach' : 'idle',
+          pose: stepIn < 1 ? 'walk' : reach > 0 ? 'reach' : 'idle',
+          reachProgress: reach,
           walkPhase: t * 4,
           talking: t > 1.2 && t < 4.5,
           facing: 1,
@@ -536,6 +537,7 @@ export const CUTSCENE: CutsceneScene[] = [
           t,
           flip: true,
           state: t > 2.8 ? 'happy' : 'idle',
+          chassisMotion: false,
           eye: t > 2.8 ? 'happy' : 'normal',
           look: 1,
           drill: true,
@@ -546,12 +548,14 @@ export const CUTSCENE: CutsceneScene[] = [
         });
 
         // Warm golden energy exchange where Mara's offered core module meets CUBE-07's gripper!
-        if (reach > 0.75) {
+        const contact = ease((reach - 0.9) / 0.1);
+        if (contact > 0) {
           const pulse = 0.55 + 0.45 * Math.sin(t * 6);
+          // Mara's offered core and the flipped service wrist share this point.
           const meetX = 401;
-          const meetY = 205;
-          glowAt(ctx, meetX, meetY, 30 + pulse * 12, '#fde047', 0.35 + 0.12 * pulse);
-          if (t < 4.5) sparksAt(ctx, meetX, meetY, t, 55, 10, 16);
+          const meetY = 207;
+          glowAt(ctx, meetX, meetY, 30 + pulse * 12, '#fde047', contact * (0.35 + 0.12 * pulse));
+          if (reach > 0.96 && t < 4.5) sparksAt(ctx, meetX, meetY, t, 55, 10, 16);
         }
       });
       filmLighting(ctx, '#191322', 0.35);
@@ -592,8 +596,10 @@ for (const scene of CUTSCENE) {
   const draw = scene.draw;
   scene.draw = (ctx, t, duration) => {
     ctx.save();
-    if (!['sulfured-caves', 'cast-out', 'free-fall', 'impact', 'first-shift'].includes(scene.id)) {
-      const push = 1.015 + easeInOut(t / duration) * 0.018;
+    // Only shots without their own camera receive a push. Applying it to every
+    // scene doubled the workshop/dolly zoom and enlarged supposedly fixed HUDs.
+    if (scene.id === 'outdated' || scene.id === 'survivors') {
+      const push = 1.012 + easeInOut(clamp(t / duration)) * 0.018;
       ctx.translate(320, 180);
       ctx.scale(push, push);
       ctx.translate(-320, -180);
@@ -605,12 +611,16 @@ for (const scene of CUTSCENE) {
 }
 
 const SCENE_JOBS: Record<string, Job<unknown>[]> = {
+  'sky-city': storySetJobs('aether'),
+  birth: storySetJobs('foundry'),
+  outdated: storySetJobs('new-aether'),
+  'self-repair': [workshopJob],
   'cast-out': [disposalJob],
   'free-fall': [earthJob, landJob],
   impact: [landJob],
   'old-mine': [mineJob],
-  survivors: [landJob],
-  'the-deal': [landJob],
+  survivors: storySetJobs('outpost'),
+  'the-deal': storySetJobs('outpost'),
   'first-shift': [shaftJob],
   'sulfured-caves': [calderaJob],
 };
@@ -639,6 +649,6 @@ export function prepareScene(index: number) {
 export function sceneAssetsReady(index: number) {
   return [index, index + 1].every((i) => {
     const s = CUTSCENE[i];
-    return !s || (SCENE_JOBS[s.id] ?? []).every((j) => j.ready);
+    return !s || ((SCENE_JOBS[s.id] ?? []).every((j) => j.ready) && (!s.set || storySetJobs(s.set).every((j) => j.ready)));
   });
 }

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { CS_H, CS_W, CUTSCENE, prepareScene } from '../game/cutscene';
 import { sound } from '../game/sound';
 import { pumpWarm, warmComplete } from '../game/cineKit';
-import { getQuality, isLite, onQualityChange, setQuality, type StoryQuality } from '../game/quality';
+import { getQuality, hasQualityPreference, isLite, onQualityChange, setQuality, type StoryQuality } from '../game/quality';
 import {
   PixelPauseIcon,
   PixelPlayIcon,
@@ -10,6 +10,7 @@ import {
   PixelSkipIcon,
 } from './PixelIcons';
 import { Portrait } from './DialogueBox';
+import { storyFontsReady } from '../game/storyFonts';
 
 interface CutsceneProps {
   onFinish: () => void;
@@ -17,6 +18,7 @@ interface CutsceneProps {
 
 const LETTER_RATE = 46;
 const DISSOLVE = 0.55;
+const LITE_FRAME_MS = 1000 / 18;
 const STORY_LENGTH = CUTSCENE.reduce((sum, scene) => sum + scene.duration, 0);
 const SCENE_STARTS = CUTSCENE.map((_, index) =>
   CUTSCENE.slice(0, index).reduce((sum, scene) => sum + scene.duration, 0)
@@ -95,7 +97,8 @@ export function Cutscene({ onFinish }: CutsceneProps) {
   // rapid skip.
   const needsPaintRef = useRef(true);
   const lastUiUpdateRef = useRef(0);
-  const switchedRef = useRef(false);
+  const switchedRef = useRef(hasQualityPreference());
+  const seekRequestedRef = useRef(false);
 
   const [sceneIndex, setSceneIndex] = useState(0);
   const [charCount, setCharCount] = useState(0);
@@ -136,6 +139,7 @@ export function Cutscene({ onFinish }: CutsceneProps) {
     setCharCount(0);
     setPaused(false);
     needsPaintRef.current = true;
+    seekRequestedRef.current = true;
     if (interactive) sound.playUiTick();
     prepareScene(target);
   }, [finish]);
@@ -183,7 +187,7 @@ export function Cutscene({ onFinish }: CutsceneProps) {
     let needsPaint = true;
     let lastIndex = -1;
     let hasPrevious = false;
-    let lastPaint = 0;
+    let paintDebt = LITE_FRAME_MS;
     let layerScale = 1;
     let costAvg = 0;
     let paintedFrames = 0;
@@ -195,7 +199,7 @@ export function Cutscene({ onFinish }: CutsceneProps) {
       layerScale = next;
       const w = CS_W * layerScale;
       const h = CS_H * layerScale;
-      // Lite paints at 320x180 and is nearest-neighbour enlarged on screen.
+      // Lite paints at 256x144 and is nearest-neighbour enlarged on screen.
       currentLayer.width = w;
       currentLayer.height = h;
       previousLayer.width = w;
@@ -207,15 +211,24 @@ export function Cutscene({ onFinish }: CutsceneProps) {
       hasPrevious = false;
       lastIndex = -1;
       needsPaint = true;
+      paintDebt = LITE_FRAME_MS;
     };
     screen.imageSmoothingEnabled = false;
     finishedRef.current = false;
     configureLayerScale();
-    prepareScene(0);
+    let disposed = false;
+    // Start decoding immediately, but do not paint text into a cached sprite until
+    // the actual pixel font is available. StrictMode's cancelled setup is harmless.
+    void storyFontsReady().then(() => {
+      if (!disposed && !finishedRef.current) prepareScene(sceneRef.current);
+    });
     const stopQuality = onQualityChange(() => configureLayerScale());
+    const resetClock = () => { lastFrameRef.current = 0; };
+    document.addEventListener('visibilitychange', resetClock);
 
     function render(now: number) {
-      const elapsed = lastFrameRef.current ? Math.min(0.07, (now - lastFrameRef.current) / 1000) : 0;
+      const frameStart = performance.now();
+      const elapsed = lastFrameRef.current && !document.hidden ? Math.min(0.25, Math.max(0, (now - lastFrameRef.current) / 1000)) : 0;
       lastFrameRef.current = now;
       if (!pausedRef.current && !finishedRef.current) timeRef.current += elapsed;
 
@@ -229,14 +242,17 @@ export function Cutscene({ onFinish }: CutsceneProps) {
       // (pumped AFTER the scene is painted — see below — so it only uses time
       //  genuinely left over in this frame.)
 
-      // Lite paints at ~18 fps into 256x144. Story time and audio stay full-rate.
-      const due = !lite || now - lastPaint >= 56;
+      // Accumulator cadence: 50/66 ms intervals at a 60 Hz display average 18 fps.
+      // A >=56 ms gate accidentally painted only every fourth vsync (15 fps).
+      paintDebt += elapsed * 1000;
+      const due = !lite || paintDebt >= LITE_FRAME_MS;
       const urgent = needsPaintRef.current;
       if ((!pausedRef.current && due) || needsPaint || urgent) {
         needsPaint = false;
         needsPaintRef.current = false;
-        lastPaint = now;
-        if (index !== lastIndex) {
+        if (lite) paintDebt %= LITE_FRAME_MS;
+        if (index !== lastIndex || seekRequestedRef.current) {
+          seekRequestedRef.current = false;
           // Freeze the outgoing scene's last frame for the dissolve instead of re-rendering it.
           if (lastIndex >= 0) {
             previousCtx.setTransform(1, 0, 0, 1, 0, 0);
@@ -268,7 +284,7 @@ export function Cutscene({ onFinish }: CutsceneProps) {
         }
         if (!lite) {
           screen.globalAlpha = 0.12;
-          screen.drawImage(grain(Math.floor(now / 85)), 0, 0);
+          screen.drawImage(grain(Math.floor(time * 12)), 0, 0);
           screen.globalAlpha = 1;
         }
 
@@ -283,26 +299,25 @@ export function Cutscene({ onFinish }: CutsceneProps) {
           }
         }
 
-        const chars = revealedRef.current
-          ? scene.text.length
-          : Math.min(scene.text.length, Math.max(0, Math.floor((time - 0.28) * LETTER_RATE)));
-        if (chars !== paintedCharsRef.current) {
-          paintedCharsRef.current = chars;
-          // Typewriter writes straight to the DOM (46 updates/s would otherwise
-          // re-render the whole player through React every frame).
-          if (captionRef.current) captionRef.current.textContent = scene.text.slice(0, chars);
-          if (cursorRef.current) cursorRef.current.style.display = chars >= scene.text.length ? 'none' : '';
-          if (chars >= scene.text.length) setCharCount(chars);
-        }
-        const globalTime = SCENE_STARTS[index] + time;
-        if (now - lastUiUpdateRef.current > 500) {
-          lastUiUpdateRef.current = now;
-          if (clockRef.current) clockRef.current.textContent = `${formatTime(Math.min(STORY_LENGTH, globalTime))} / ${formatTime(STORY_LENGTH)}`;
-        }
-        if (progressRef.current) {
-          progressRef.current.style.width = `${Math.min(100, (globalTime / STORY_LENGTH) * 100)}%`;
-        }
       }
+      // Narration and the progress strip stay full-rate even when art is gated.
+      // Only actual character changes touch the DOM; React renders just once at
+      // the end of the caption, not once per typed letter.
+      const chars = revealedRef.current
+        ? scene.text.length
+        : Math.min(scene.text.length, Math.max(0, Math.floor((time - 0.28) * LETTER_RATE)));
+      if (chars !== paintedCharsRef.current) {
+        paintedCharsRef.current = chars;
+        if (captionRef.current) captionRef.current.textContent = scene.text.slice(0, chars);
+        if (cursorRef.current) cursorRef.current.style.display = chars >= scene.text.length ? 'none' : '';
+        if (chars >= scene.text.length) setCharCount(chars);
+      }
+      const globalTime = SCENE_STARTS[index] + Math.min(time, scene.duration);
+      if (now - lastUiUpdateRef.current > 250) {
+        lastUiUpdateRef.current = now;
+        if (clockRef.current) clockRef.current.textContent = `${formatTime(globalTime)} / ${formatTime(STORY_LENGTH)}`;
+      }
+      if (progressRef.current) progressRef.current.style.transform = `scaleX(${Math.min(1, globalTime / STORY_LENGTH)})`;
       // Background environment builds: on EVERY tick (painted or not) spend only
       // what is genuinely left of a 60 fps frame, minus a compositing margin.
       // Small, frequent slices never push a frame over budget; big rare ones do.
@@ -310,11 +325,11 @@ export function Cutscene({ onFinish }: CutsceneProps) {
       // frame. Without the floor below, a heavy set (the 1920x960 caldera is
       // ~450 ms of work) can never finish when every frame is over budget, and
       // the scene stays on its placeholder forever ("story won't render").
-      if (!warmComplete()) {
-        const left = 16.7 - (performance.now() - now) - 2.5;
-        pumpWarm(Math.max(1.4, Math.min(6, left)));
+      if (!document.hidden && !warmComplete()) {
+        const left = 16.7 - (performance.now() - frameStart) - 2.5;
+        pumpWarm(Math.max(2.5, Math.min(6, left)));
       }
-      if (!pausedRef.current) {
+      if (!pausedRef.current && !document.hidden && !finishedRef.current) {
         for (const [cueIndex, cue] of (CUES[scene.id] || []).entries()) {
           if (time >= cue.at && !firedCues.current.has(cueIndex)) {
             cue.play();
@@ -330,14 +345,21 @@ export function Cutscene({ onFinish }: CutsceneProps) {
 
     raf = requestAnimationFrame(render);
     return () => {
+      disposed = true;
       cancelAnimationFrame(raf);
       stopQuality();
+      document.removeEventListener('visibilitychange', resetClock);
       finishedRef.current = true;
     };
   }, [seek]);
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
+      if (event.repeat) return;
+      const target = event.target as HTMLElement | null;
+      // Let focused buttons keep their native Enter/Space activation instead of
+      // advancing narration underneath a Skip/Restart/chapter button.
+      if ((event.code === 'Space' || event.code === 'Enter') && target?.closest('button, a, input, select, textarea')) return;
       if (event.code === 'Escape') {
         event.preventDefault();
         finish();
@@ -382,7 +404,7 @@ export function Cutscene({ onFinish }: CutsceneProps) {
             className={`cinematic-control cinematic-quality ${quality === 'lite' ? 'is-lite' : ''}`}
             aria-label={quality === 'lite' ? 'Lite mode on. Switch to HD quality' : 'HD quality on. Switch to Lite mode'}
             aria-pressed={quality === 'lite'}
-            title={quality === 'lite' ? 'Lite mode: 30 fps, fewer effects (L)' : 'HD: full effects (L)'}
+            title={quality === 'lite' ? 'Lite mode: 18 fps, fewer effects (L)' : 'HD: full effects (L)'}
             onClick={toggleQuality}
           >
             <span className="font-pixel text-[8px]">{quality === 'lite' ? 'LITE' : 'HD'}</span>
@@ -433,7 +455,7 @@ export function Cutscene({ onFinish }: CutsceneProps) {
       <footer className="cinematic-bottom shrink-0 px-2.5 pt-2 pb-[max(0.45rem,env(safe-area-inset-bottom))] sm:px-5">
         <div className="mx-auto w-full max-w-[920px]">
           <div className="relative h-1 bg-[#27232d]">
-            <div ref={progressRef} className="absolute inset-y-0 left-0 bg-[#f1be76]" />
+            <div ref={progressRef} className="absolute inset-0 origin-left bg-[#f1be76]" style={{ transform: 'scaleX(0)' }} />
           </div>
           <div className="mt-1 flex gap-1">
             {CUTSCENE.map((chapter, index) => (

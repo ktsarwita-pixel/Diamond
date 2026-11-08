@@ -5,6 +5,7 @@
  * ================================================================== */
 import { CH, CW, INK, R, clamp, hash, rgba } from './cutsceneArt';
 import { isLite, qn } from './quality';
+import { cacheGet, cacheSet } from './spriteCache';
 
 export type RGB3 = [number, number, number];
 
@@ -294,17 +295,20 @@ if (typeof window !== 'undefined') window.__storyWarm = warmStatus;
 /* ------------------------------ soft light blobs ------------------------------ */
 const blobCache = new Map<string, HTMLCanvasElement>();
 export function blob(color: string): HTMLCanvasElement {
-  let c = blobCache.get(color);
+  let c = cacheGet(blobCache, color);
   if (c) return c;
   const [canvas, ctx] = makeCanvas(64, 64);
+  const image = ctx.createImageData(64, 64), data = image.data;
+  const col = hex3(color);
   for (let y = 0; y < 64; y++) for (let x = 0; x < 64; x++) {
     const d = Math.hypot(x - 32, y - 32) / 32;
     if (d >= 1) continue;
-    ctx.globalAlpha = Math.floor((1 - d) ** 2 * 9 + bayer(x, y) + 0.5) / 9;
-    R(ctx, x, y, 1, 1, color);
+    const i = (y * 64 + x) * 4;
+    data[i] = col[0]; data[i + 1] = col[1]; data[i + 2] = col[2];
+    data[i + 3] = Math.round(clamp(Math.floor((1 - d) ** 2 * 9 + bayer(x, y) + 0.5) / 9) * 255);
   }
-  ctx.globalAlpha = 1;
-  blobCache.set(color, canvas);
+  ctx.putImageData(image, 0, 0);
+  cacheSet(blobCache, color, canvas, 64);
   c = canvas;
   return c;
 }
@@ -314,8 +318,8 @@ export function drawBlob(ctx: CanvasRenderingContext2D, color: string, x: number
   const prevOp = ctx.globalCompositeOperation;
   const prevA = ctx.globalAlpha;
   if (additive) ctx.globalCompositeOperation = 'lighter';
-  ctx.globalAlpha = Math.min(1, a);
-  ctx.drawImage(blob(color), x - r, y - r, r * 2, r * 2);
+  ctx.globalAlpha = prevA * Math.min(1, a);
+  ctx.drawImage(blob(color), Math.round(x - r), Math.round(y - r), Math.round(r * 2), Math.round(r * 2));
   ctx.globalAlpha = prevA;
   ctx.globalCompositeOperation = prevOp;
 }
@@ -325,37 +329,32 @@ const puffCache = new Map<string, HTMLCanvasElement>();
 /** Textured, top-lit volumetric puff (pixel-dithered edges). */
 export function puff(seed: number, light: string, dark: string): HTMLCanvasElement {
   const key = `${seed}-${light}-${dark}`;
-  const hit = puffCache.get(key);
+  const hit = cacheGet(puffCache, key);
   if (hit) return hit;
   const S = 48;
   const [c, ctx] = makeCanvas(S, S);
+  const image = ctx.createImageData(S, S), data = image.data;
   const n = makeNoise(seed * 13 + 7);
   const L = hex3(light);
   const D = hex3(dark);
-  paintPixels(ctx, 0, 0, S, S, (x, y, o) => {
+  for (let y = 0; y < S; y++) for (let x = 0; x < S; x++) {
+    const i = (y * S + x) * 4;
     const dx = (x - S / 2) / (S / 2);
     const dy = (y - S / 2) / (S / 2);
     const r = Math.sqrt(dx * dx + dy * dy);
     const lump = n.fbm(x * 0.09, y * 0.09, 3);
     const edge = 1 - r + (lump - 0.5) * 0.7;
-    if (edge <= 0) {
-      o[3] = 0;
-      return;
-    }
+    if (edge <= 0) continue;
     const alpha = clamp(edge * 2.4);
-    if (alpha + bayer(x, y) * 0.5 < 0.25) {
-      o[3] = 0;
-      return;
-    }
+    if (alpha + bayer(x, y) * 0.5 < 0.25) continue;
     // top-left lit, bottom-right shadowed
     const lit = clamp(0.62 - dy * 0.55 - dx * 0.15 + (lump - 0.5) * 0.6);
     const col = lerp3(D, L, band(lit, 5, x, y));
-    o[0] = col[0];
-    o[1] = col[1];
-    o[2] = col[2];
-    o[3] = Math.round(clamp(alpha) * 255);
-  });
-  puffCache.set(key, c);
+    data[i] = col[0]; data[i + 1] = col[1]; data[i + 2] = col[2];
+    data[i + 3] = Math.round(clamp(alpha) * 255);
+  }
+  ctx.putImageData(image, 0, 0);
+  cacheSet(puffCache, key, c, 160);
   return c;
 }
 
@@ -371,8 +370,8 @@ export function drawPuff(
 ) {
   if (alpha <= 0.01 || size < 1) return;
   const prev = ctx.globalAlpha;
-  ctx.globalAlpha = Math.min(1, alpha);
-  ctx.drawImage(puff(seed % 6, light, dark), x - size / 2, y - size / 2, size, size);
+  ctx.globalAlpha = prev * Math.min(1, alpha);
+  ctx.drawImage(puff(seed % 6, light, dark), Math.round(x - size / 2), Math.round(y - size / 2), Math.round(size), Math.round(size));
   ctx.globalAlpha = prev;
 }
 
@@ -452,21 +451,33 @@ export function plasmaFront(ctx: CanvasRenderingContext2D, x: number, y: number,
 
 /* ------------------------------ heat shimmer ------------------------------ */
 /** Displaces horizontal scanlines of what's already on the canvas (refraction look). */
+let heatSource: [HTMLCanvasElement, CanvasRenderingContext2D] | null = null;
 export function heatShimmer(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, t: number, amp: number) {
   if (amp < 0.2 || isLite()) return;
-  const x0 = Math.max(0, Math.round(x));
-  const y0 = Math.max(0, Math.round(y));
-  const x1 = Math.min(CW, Math.round(x + w));
-  const y1 = Math.min(CH, Math.round(y + h));
-  const ww = x1 - x0;
-  if (ww <= 4 || y1 - y0 <= 2) return;
-  ctx.save();
-  ctx.setTransform(1, 0, 0, 1, 0, 0);
-  for (let yy = y0; yy < y1 - 2; yy += 2) {
-    const edge = Math.sin(((yy - y0) / (y1 - y0)) * Math.PI);
-    const off = Math.round(Math.sin(yy * 0.37 + t * 21) * amp * edge + Math.sin(yy * 0.11 - t * 9) * amp * 0.5 * edge);
-    if (off === 0) continue;
-    ctx.drawImage(ctx.canvas, x0, yy, ww, 2, x0 + off, yy, ww, 2);
+  // Map the requested logical region through the active camera/shake transform.
+  // Resetting to identity before measuring used to shimmer the wrong pixels.
+  const m = ctx.getTransform();
+  const ax = m.a * x + m.c * y + m.e, ay = m.b * x + m.d * y + m.f;
+  const bx = m.a * (x + w) + m.c * (y + h) + m.e, by = m.b * (x + w) + m.d * (y + h) + m.f;
+  const x0 = Math.max(0, Math.floor(Math.min(ax, bx))), y0 = Math.max(0, Math.floor(Math.min(ay, by)));
+  const x1 = Math.min(ctx.canvas.width, Math.ceil(Math.max(ax, bx))), y1 = Math.min(ctx.canvas.height, Math.ceil(Math.max(ay, by)));
+  const ww = x1 - x0, hh = y1 - y0;
+  if (ww <= 4 || hh <= 2) return;
+  const pixelScale = Math.max(1, Math.hypot(m.a, m.b));
+  if (!heatSource) heatSource = makeCanvas(ww, hh);
+  const [source, g] = heatSource;
+  if (source.width < ww || source.height < hh) {
+    source.width = Math.max(source.width, ww); source.height = Math.max(source.height, hh);
+    g.imageSmoothingEnabled = false;
+  }
+  ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0);
+  // One snapshot, rather than repeatedly reading the destination canvas. Besides
+  // avoiding read/write stalls, every displaced line uses the original image.
+  g.drawImage(ctx.canvas, x0, y0, ww, hh, 0, 0, ww, hh);
+  for (let yy = 0; yy < hh - 2; yy += 2) {
+    const edge = Math.sin((yy / hh) * Math.PI);
+    const off = Math.round((Math.sin((yy + y0) * 0.37 + t * 21) + Math.sin((yy + y0) * 0.11 - t * 9) * 0.5) * amp * edge * pixelScale);
+    if (off !== 0) ctx.drawImage(source, 0, yy, ww, 2, x0 + off, y0 + yy, ww, 2);
   }
   ctx.restore();
 }
@@ -573,7 +584,7 @@ export function hudPanel(ctx: CanvasRenderingContext2D, x: number, y: number, w:
 const vignetteCache = new Map<string, HTMLCanvasElement>();
 function vignetteSprite(color: string, a: number, cx: number, cy: number, r0: number, r1: number) {
   const key = `${color}:${a.toFixed(2)}:${cx}:${cy}:${r0}:${r1}`;
-  let v = vignetteCache.get(key);
+  let v = cacheGet(vignetteCache, key);
   if (!v) {
     v = document.createElement('canvas');
     v.width = CW;
@@ -584,8 +595,7 @@ function vignetteSprite(color: string, a: number, cx: number, cy: number, r0: nu
     grad.addColorStop(1, rgba(color, a));
     g.fillStyle = grad;
     g.fillRect(0, 0, CW, CH);
-    if (vignetteCache.size > 40) vignetteCache.clear();
-    vignetteCache.set(key, v);
+    cacheSet(vignetteCache, key, v, 48);
   }
   return v;
 }
@@ -608,8 +618,15 @@ export function grade(ctx: CanvasRenderingContext2D, wash: string, washA: number
   ctx.restore();
 }
 
-/** Seeded deterministic shake offset. */
+/** Deterministic, band-limited shake; respects the user's reduced-motion setting. */
+const reducedMotion = typeof window !== 'undefined' && window.matchMedia
+  ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
 export function shake(t: number, amp: number): [number, number] {
-  if (amp <= 0) return [0, 0];
-  return [(hash(Math.floor(t * 60)) - 0.5) * amp * 2, (hash(Math.floor(t * 60) + 91) - 0.5) * amp * 2];
+  if (amp <= 0 || reducedMotion?.matches) return [0, 0];
+  // Band-limited, continuous shake avoids random one-frame teleportation. The
+  // envelope still controls intensity; rounding happens at the pixel boundary.
+  return [
+    Math.round((Math.sin(t * 73) + Math.sin(t * 113) * 0.45) * amp * 0.68),
+    Math.round((Math.sin(t * 89 + 1.7) + Math.sin(t * 127) * 0.35) * amp * 0.6),
+  ];
 }

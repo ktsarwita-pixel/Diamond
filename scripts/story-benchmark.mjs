@@ -8,6 +8,10 @@ try {
   const result = await page.evaluate(async () => {
     const { CUTSCENE, prepareScene } = await import('/src/game/cutscene.ts');
     const { setQuality } = await import('/src/game/quality.ts');
+    const { pumpWarm, warmComplete } = await import('/src/game/cineKit.ts');
+    // Time finished artwork, not the lightweight placeholders used during streaming.
+    prepareScene(0);
+    while (!warmComplete()) pumpWarm(30);
     const all = {};
     for (const mode of ['hd', 'lite']) {
       setQuality(mode, false);
@@ -40,8 +44,8 @@ try {
   const mean = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;
   const hd = mean(result.hd), lite = mean(result.lite);
   const hdMsPerSecond = hd * 60;
-  const liteMsPerSecond = lite * (1000 / 56);
-  const rasterRatio = (640 * 360 * 60) / (256 * 144 * (1000 / 56));
+  const liteMsPerSecond = lite * 18;
+  const rasterRatio = (640 * 360 * 60) / (256 * 144 * 18);
   console.log(`Mean scene draw: HD ${hd.toFixed(2)} ms/frame; Lite ${lite.toFixed(2)} ms/frame.`);
   console.log(`Estimated main-thread draw budget: ${hdMsPerSecond.toFixed(1)} ms/s HD; ${liteMsPerSecond.toFixed(1)} ms/s Lite.`);
   console.log(`Estimated draw-time improvement: ${(hdMsPerSecond / liteMsPerSecond).toFixed(1)}x; raster-pixel budget: ${rasterRatio.toFixed(1)}x lower in Lite.`);

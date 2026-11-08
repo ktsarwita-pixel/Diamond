@@ -27,6 +27,7 @@ export const Portrait: React.FC<{ speaker: SpeakerId; talking?: boolean; size?: 
 
     const draw = (now: number) => {
       raf = requestAnimationFrame(draw);
+      if (document.hidden) return;
       if (now - lastPaint < 1000 / 30) return;
       lastPaint = now;
       const t = (now - start) / 1000;

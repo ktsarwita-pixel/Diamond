@@ -570,6 +570,7 @@ export function drawShaftScene(ctx: CanvasRenderingContext2D, t: number, duratio
     s: 2.55,
     t,
     state: 'idle',
+    chassisMotion: false,
     eye: 'scan',
     look: 1,
     drill: true,
