@@ -38,21 +38,23 @@ const HEART_CHANNEL: Point[] = [[1666, 526], [1620, 543], [1612, 580], [1600, 62
 const HEART_SEAM: Point[] = [[1604, 250], [1560, 320], [1548, 372], [1572, 420],
   [1600, 470], [1612, 520], [1598, 566]];
 const PORTAL = {
-  x: 40, y: 440, w: 360, h: 300,
-  // The adit opens SIDEWAYS into the cavern. The clear travel lane has no right
-  // jamb/return wall: CUBE rolls out of the recess, not laterally through timber.
-  opening: { x: 160, y: 580, w: 124, h: 82 },
-  travelLane: { x: 164, y: 600, w: 116, h: 58 },
-  leftJamb: { x: 148, y: 572, w: 12, h: 94 },
-  lintel: { x: 144, y: 564, w: 140, h: 14 },
-  footings: [{ x: 154, y: 666 }],
+  x: 60, y: 430, w: 320, h: 280,
+  // A front-facing mine portal. CUBE rolls TOWARD the viewer between the two
+  // timber legs, then turns right only after his treads are below the footings.
+  opening: { x: 180, y: 574, w: 100, h: 88 },
+  travelLane: { x: 188, y: 590, w: 84, h: 52 },
+  leftJamb: { x: 168, y: 566, w: 12, h: 78 },
+  rightJamb: { x: 280, y: 566, w: 12, h: 78 },
+  lintel: { x: 164, y: 552, w: 132, h: 14 },
+  postBase: 644,
+  footings: [{ x: 174, y: 650 }, { x: 286, y: 650 }],
 } as const;
 const finish = (x: number) => { const t = clamp(x); return t * t * t * (10 + t * (-15 + t * 6)); };
 const n = makeNoise(124612);
 
 // The same sampled surface drives both the rock silhouette and tread contact.
 function shoreHeight(x: number) {
-  return 659 - 28 * finish((x - 260) / 350) + Math.sin(x * 0.014) * 2.5;
+  return 659 - 28 * finish((x - 260) / 350) + Math.sin(x * 0.014) * 2.5 + n.noise(x * 0.045, 7) * 2.2;
 }
 const PATH_TOP: Point[] = Array.from({ length: 100 }, (_, i) => {
   const x = -64 + i * 8;
@@ -105,32 +107,35 @@ function insidePolygon(points: readonly Point[], x: number, y: number) {
 function ctxAlpha(ctx: CanvasRenderingContext2D, alpha: number, draw: () => void) {
   ctx.save(); ctx.globalAlpha = alpha; draw(); ctx.restore();
 }
-/** Sedimentary bedding + fractures clipped to the actual rock silhouette. */
+/** Sparse, broken bedding planes — not continuous stripes across the cave. */
 function* beddingGen(ctx: CanvasRenderingContext2D, points: readonly Point[], seed: number, dark: string, light: string): Generator<void, void, unknown> {
   const slice = sliceTimer();
   const minX = Math.min(...points.map(p => p[0])), maxX = Math.max(...points.map(p => p[0]));
   const minY = Math.min(...points.map(p => p[1])), maxY = Math.max(...points.map(p => p[1]));
   let row = 0;
-  for (let y = minY + 10; y < maxY - 4; y += 16, row++) {
-    let prev: Point | null = null;
-    for (let x = minX; x <= maxX; x += 6) {
-      const yy = y + Math.sin(x * 0.02 + seed) * 3 + n.noise(x * 0.01, seed + row) * 4;
-      if (insidePolygon(points, x, yy)) {
-        if (prev) pixelLine(ctx, prev, [x, yy], row % 3 === 0 ? light : dark, 1);
-        prev = [x, yy];
-      } else prev = null;
+  for (let y = minY + 18; y < maxY - 8; y += 30, row++) {
+    let x = minX + hash(seed + row * 11) * 24;
+    while (x < maxX - 12) {
+      const len = 18 + hash(seed + row * 7 + x) * 46;
+      const gap = 12 + hash(seed + row * 13 + x) * 30;
+      const yy = y + Math.sin(x * 0.018 + seed) * 2.5;
+      const y2 = y + Math.sin((x + len) * 0.018 + seed) * 2.5;
+      if (insidePolygon(points, x, yy) && insidePolygon(points, x + len, y2)) {
+        ctxAlpha(ctx, 0.4, () => pixelLine(ctx, [x, yy], [x + len, y2], row % 3 === 0 ? light : dark, 1));
+      }
+      x += len + gap;
     }
     if (slice.due()) yield;
   }
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < 4; i++) {
     let x = minX + hash(seed + i * 13) * (maxX - minX);
     let y = minY + hash(seed + i * 7) * (maxY - minY) * 0.5;
     let prev: Point | null = null;
-    for (let k = 0; k < 18; k++) {
-      x += (hash(seed + i * 31 + k) - 0.5) * 10;
-      y += 8 + hash(seed + k) * 8;
+    for (let k = 0; k < 12; k++) {
+      x += (hash(seed + i * 31 + k) - 0.5) * 9;
+      y += 9 + hash(seed + k) * 9;
       if (insidePolygon(points, x, y)) {
-        if (prev) pixelLine(ctx, prev, [x, y], dark, 1);
+        if (prev) ctxAlpha(ctx, 0.5, () => pixelLine(ctx, prev!, [x, y], dark, 1));
         prev = [x, y];
       } else prev = null;
     }
@@ -181,22 +186,28 @@ export const riftGeometry = {
   },
 };
 export function calderaWalkerAt(t: number) {
-  // Chapter 11's cage reaches the 186 m level; CUBE rolls OUT of the old adit,
-  // pauses to scan, then advances to the overlook. He does not begin mid-ledge.
-  const rollOut = finish((t - 0.5) / 4.6);
-  const overlook = finish((t - 6.2) / 3.4);
-  const x = lerp(lerp(176, 430, rollOut), 622, overlook);
-  return { x, deck: groundAt(x), travel: (x - 176) / (622 - 176), rollOut, overlook, supported: x >= -64 && x <= 724 };
+  const exit = finish((t - 0.6) / 2.6);
+  const advance = finish((t - 4.4) / 4.4);
+  const x = lerp(230, 622, advance);
+  const mouthY = PORTAL.opening.y + PORTAL.opening.h;
+  const exitY = lerp(632, mouthY, exit);
+  const deck = advance === 0 ? exitY : lerp(mouthY, groundAt(x), finish((x - 230) / 80));
+  const s = lerp(1.25, 1.7, exit) + 0.15 * finish(advance * 3);
+  const inFront = exit >= 1; // latch: once closer than the footings, stay in front
+  const phase = t < 0.6 ? 'inside' : t < 3.2 ? 'exit' : t < 4.4 ? 'scan' : 'advance';
+  return {
+    x, deck, s, travel: (x - 230) / (622 - 230), rollOut: exit, overlook: advance,
+    inFront, phase, supported: exit < 1 || Math.abs(deck - groundAt(x)) < 6,
+  };
 }
 export function riftCameraAt(t: number) {
-  const follow = finish((t - 0.4) / 6.3);
-  const reveal = finish((t - 5.2) / 9.4);
-  // After the wide cavern reveal, ease into a closer awe shot of the Heart.
-  const awe = finish((t - 10.8) / 6.4);
+  const follow = finish((t - 3.2) / 5.6);
+  const reveal = finish((t - 7.8) / 6.8);
+  const awe = finish((t - 12.8) / 4.4);
   return {
-    x: lerp(lerp(lerp(391, 629, follow), 970, reveal), 1128, awe),
-    y: lerp(lerp(lerp(540, 538, follow), 471, reveal), 452, awe),
-    zoom: lerp(lerp(lerp(1.16, 0.86, follow), 0.39, reveal), 0.5, awe),
+    x: lerp(lerp(lerp(300, 629, follow), 970, reveal), 1128, awe),
+    y: lerp(lerp(lerp(565, 538, follow), 471, reveal), 452, awe),
+    zoom: lerp(lerp(lerp(1.2, 0.86, follow), 0.39, reveal), 0.5, awe),
   };
 }
 
@@ -232,7 +243,7 @@ export const calderaJob = new Job(function* (): Generator<unknown, RiftLayers, u
   const slice = sliceTimer();
   const [distant, d] = makeCanvas(W, H);
   const [low, l] = makeCanvas(W / 2, H / 2);
-  const dark = hex3('#091c27'), light = hex3('#365359'), warm = hex3('#877e4c');
+  const dark = hex3('#0b1c24'), light = hex3('#2e474c'), warm = hex3('#7a7048');
   yield* paintPixelsGen(l, 0, 0, W / 2, H / 2, (hx, hy, o) => {
     const x = hx * 2, y = hy * 2;
     const texture = n.fbm(x * 0.004, y * 0.007, 3);
@@ -263,23 +274,22 @@ export const calderaJob = new Job(function* (): Generator<unknown, RiftLayers, u
       right = Math.max(right, centerline[y] + radius[y]);
     }
     const x0 = Math.max(0, Math.floor(left) - 3), x1 = Math.min(W, Math.ceil(right) + 3);
-    const deep = hex3('#102936'), lit = hex3('#71847c');
+    const deep = hex3('#142c33'), lit = hex3('#6f7d6d');
     yield* paintPixelsGen(d, x0, 0, x1 - x0, H, (x, y, o) => {
       const q = (x - centerline[y]) / radius[y];
       if (Math.abs(q) > 1) return;
       const flutes = n.fbm(x * 0.045 + ci * 7, y * 0.004, 3);
       const fracture = Math.abs(n.noise(x * 0.09, y * 0.002 + ci) - 0.5) < 0.018 ? -0.16 : 0;
-      const bedding = Math.sin(y * 0.08 + x * 0.012 + ci) * 0.035;
-      const lambert = clamp(0.24 + Math.sqrt(Math.max(0, 1 - q * q)) * 0.38 + q * 0.18 + (flutes - 0.5) * 0.56 + fracture + bedding);
+      const lambert = clamp(0.24 + Math.sqrt(Math.max(0, 1 - q * q)) * 0.38 + q * 0.18 + (flutes - 0.5) * 0.62 + fracture);
       const k = band(lambert, 9, x, y);
-      for (let c = 0; c < 3; c++) o[c] = deep[c] + (lit[c] - deep[c]) * k * 0.66;
+      for (let c = 0; c < 3; c++) o[c] = deep[c] + (lit[c] - deep[c]) * k * 0.6;
       o[3] = 255;
     });
   }
 
   const [geology, g] = makeCanvas(W, H);
   yield* rockTextureGen(g, RIGHT_WALL, '#283e3e', '#b8a980', 61);
-  yield* beddingGen(g, RIGHT_WALL, 61, '#1f3230', '#6f7358');
+  yield* beddingGen(g, RIGHT_WALL, 61, '#243a38', '#5f6b52');
   // Eroded benches belong to the same cliff, not disconnected floating slabs.
   for (let i = 0; i < BENCHES.length; i++) {
     const profile = BENCHES[i];
@@ -328,7 +338,7 @@ export const calderaJob = new Job(function* (): Generator<unknown, RiftLayers, u
 
   const [ledge, path] = makeCanvas(W, H);
   yield* rockTextureGen(path, LEDGE, '#233c43', '#9eaa8a', 125);
-  yield* beddingGen(path, LEDGE, 125, '#182c31', '#7f927d');
+  yield* beddingGen(path, LEDGE, 125, '#1d3338', '#6f8270');
   for (let i = 1; i < PATH_TOP.length; i++) {
     const a = PATH_TOP[i - 1], b = PATH_TOP[i];
     pixelLine(path, a, b, '#b4baa0', 2);
@@ -340,48 +350,66 @@ export const calderaJob = new Job(function* (): Generator<unknown, RiftLayers, u
     yield* rockTextureGen(path, stone(x, y, 5 + hash(i) * 8, 4 + hash(i * 3) * 6, i + 5), '#20373c', '#7f927d', i + 141);
   }
 
-  // The 186 m adit is cut into a limestone shoulder. The back layer carries the
-  // receding tunnel; the front layer is solid rock + timber that occludes CUBE.
+  // Front-facing adit at the cliff edge: dark receding tunnel behind, solid
+  // limestone left/top, two timber legs on stone footings, open cavern to right.
   const [portalBack, pb] = makeCanvas(PORTAL.w, PORTAL.h);
-  // A side-driving adit: the recess recedes to the LEFT, while the right side is
-  // open cavern. There is no exit-side pillar for the rig to phase through.
-  polygon(pb, [[114, 226], [114, 176], [124, 154], [146, 140], [176, 136],
-    [208, 146], [228, 160], [236, 170], [236, 226]], '#071014');
-  polygon(pb, [[114, 226], [236, 226], [220, 210], [130, 210]], '#1a2326');
-  pixelLine(pb, [124, 226], [142, 210], '#3a4a44', 1);
-  pixelLine(pb, [224, 226], [208, 210], '#2a3a34', 1);
+  polygon(pb, [[120, 230], [120, 144], [132, 132], [208, 132], [220, 144], [220, 230]], '#071014');
+  polygon(pb, [[120, 230], [220, 230], [202, 206], [138, 206]], '#1a2326');
+  pixelLine(pb, [132, 230], [148, 206], '#3a4a44', 1);
+  pixelLine(pb, [208, 230], [192, 206], '#2a3a34', 1);
   for (let i = 0; i < 3; i++) {
-    const x = 118 + i * 14, yTop = 150 + i * 6, yBot = 222 - i * 4;
+    const inset = 10 + i * 12, yTop = 144 + i * 8, yBot = 228 - i * 6;
     ctxAlpha(pb, 0.5 - i * 0.12, () => {
-      px(pb, x, yTop, 3, yBot - yTop, '#2a2e36');
-      px(pb, x, yTop - 3, 34 - i * 8, 3, '#2a2e36');
+      px(pb, 120 + inset, yTop, 4, yBot - yTop, '#2a2e36');
+      px(pb, 220 - inset - 4, yTop, 4, yBot - yTop, '#2a2e36');
+      px(pb, 120 + inset, yTop - 4, 100 - inset * 2, 4, '#2a2e36');
     });
   }
   const [portalFront, pf] = makeCanvas(PORTAL.w, PORTAL.h);
-  const SHOULDER: Point[] = [[0, 232], [0, 168], [34, 122], [88, 90], [150, 84],
-    [206, 112], [236, 140], [246, 152], [244, 156], [228, 152], [208, 146],
-    [176, 136], [146, 140], [124, 154], [114, 176], [114, 232]];
-  yield* rockTextureGen(pf, SHOULDER, '#233c43', '#9eaa8a', 126);
-  yield* beddingGen(pf, SHOULDER, 126, '#182c31', '#7f927d');
-  // Stone footing ties the near timber leg into the walking ledge.
-  yield* rockTextureGen(pf, [[102, 232], [104, 220], [122, 220], [124, 232]], '#3a4b42', '#a8aa79', 127);
-  // Near jamb only; the travel lane to the right remains completely open.
-  px(pf, 108, 136, 12, 90, '#1b232b');
-  px(pf, 109, 136, 9, 90, '#5a422a');
-  px(pf, 109, 136, 2, 90, '#8a6a44');
-  px(pf, 117, 136, 1, 90, '#2a2018');
-  for (let y = 144; y < 222; y += 16) px(pf, 110, y, 6, 2, '#2a2e36');
-  px(pf, 104, 124, 140, 14, '#1b232b');
-  px(pf, 105, 125, 138, 11, '#5a422a');
-  px(pf, 105, 125, 138, 2, '#8a6a44');
-  pixelLine(pf, [112, 138], [126, 150], '#3a3a40', 3);
-  // Contact shadow under the lintel, kept above the clear travel lane.
-  ctxAlpha(pf, 0.35, () => px(pf, 114, 138, 126, 2, '#041014'));
+  const LEFT_MASS: Point[] = [[0, 236], [0, 150], [36, 104], [84, 80], [108, 100], [120, 144], [120, 236]];
+  const ARCH: Point[] = [[84, 80], [120, 52], [190, 48], [232, 72], [268, 84], [232, 100], [220, 144], [120, 144], [108, 100]];
+  yield* rockTextureGen(pf, LEFT_MASS, '#233c43', '#9eaa8a', 126);
+  yield* rockTextureGen(pf, ARCH, '#233c43', '#9eaa8a', 127);
+  yield* beddingGen(pf, LEFT_MASS, 126, '#182c31', '#7f927d');
+  yield* beddingGen(pf, ARCH, 127, '#182c31', '#7f927d');
+  // Stone footings carry the timber loads into the ledge.
+  yield* rockTextureGen(pf, [[102, 226], [104, 214], [122, 214], [124, 226]], '#3a4b42', '#a8aa79', 128);
+  yield* rockTextureGen(pf, [[214, 226], [216, 214], [234, 214], [236, 226]], '#3a4b42', '#a8aa79', 129);
+  for (const x of [108, 220]) {
+    px(pf, x, 136, 12, 78, '#1b232b');
+    px(pf, x + 1, 136, 9, 78, '#4a3522');
+    px(pf, x + 1, 136, 2, 78, '#7a5a38');
+    px(pf, x + 8, 136, 1, 78, '#241a12');
+    // Weathered grain, knots and iron straps instead of clean orange rectangles.
+    ctxAlpha(pf, 0.55, () => {
+      px(pf, x + 4, 140, 1, 70, '#2a1e14');
+      px(pf, x + 6, 146, 1, 62, '#6b4e30');
+    });
+    ellipse(pf, x + 5, 168, 1.5, 2, '#241a12');
+    ellipse(pf, x + 6, 194, 1, 1.5, '#2a1e14');
+    for (const y of [140, 206]) {
+      px(pf, x, y, 12, 3, '#20242c');
+      px(pf, x + 1, y, 10, 1, '#4b5563');
+      px(pf, x + 2, y + 1, 1, 1, '#9ca3af');
+      px(pf, x + 9, y + 1, 1, 1, '#9ca3af');
+    }
+  }
+  px(pf, 104, 122, 132, 14, '#1b232b');
+  px(pf, 105, 123, 130, 11, '#4a3522');
+  px(pf, 105, 123, 130, 2, '#7a5a38');
+  ctxAlpha(pf, 0.5, () => {
+    pixelLine(pf, [110, 128], [230, 128], '#2a1e14', 1);
+    pixelLine(pf, [112, 131], [228, 131], '#6b4e30', 1);
+  });
+  for (const x of [112, 168, 224]) px(pf, x, 124, 2, 10, '#20242c');
+  // Knee braces stay above the robot's head clearance.
+  pixelLine(pf, [116, 140], [132, 156], '#3a3a40', 4);
+  pixelLine(pf, [224, 140], [208, 156], '#3a3a40', 4);
+  ctxAlpha(pf, 0.35, () => px(pf, 120, 136, 100, 2, '#041014'));
   yield;
 
   const [foreground, f] = makeCanvas(W, H);
   yield* rockTextureGen(f, CEILING, '#071b24', '#42635e', 151);
-  yield* beddingGen(f, CEILING, 151, '#04121a', '#2e4a44');
   // Dripstone is fused to the ceiling contour, not floating icicles.
   for (const [x, len, w] of [[250, 46, 12], [650, 62, 16], [1050, 38, 10], [1450, 70, 18]]) {
     const y = ceilingAt(x);
@@ -529,31 +557,36 @@ export function drawCalderaScene(ctx: CanvasRenderingContext2D, t: number) {
   ctx.drawImage(layers.ledge, 0, 0);
   ctx.drawImage(layers.portalBack, PORTAL.x, PORTAL.y);
 
-  // Both tread edges clear the slope, not just the centre of the rig.
-  // Slight perspective growth as he leaves the deep adit and reaches the ledge.
-  const s = lerp(1.5, 1.85, finish((walker.x - 176) / 90));
-  const supportY = Math.min(groundAt(walker.x - s * 12), groundAt(walker.x), groundAt(walker.x + s * 12));
-  const glance = finish((t - 7.5) / 2.1);
-  ellipse(ctx, walker.x, supportY + 1, 21, 2, 'rgba(2,12,17,0.5)');
-  heroRobot(ctx, {
-    x: walker.x, y: supportY - 15 * s - 0.55, s, t,
-    state: t < 9.6 ? 'idle' : 'happy', chassisMotion: false, paintMix: 1,
-    drill: true, drillAngle: 0.22, drillExtend: 0.12,
-    drillSpin: 0, wheelPhase: walker.travel * 24, eye: t > 9.6 ? 'normal' : 'scan', look: 1,
-  });
-  const bx = walker.x + 8, by = supportY - 42;
-  ctx.save(); ctx.globalAlpha = 0.08;
-  polygon(ctx, [[bx, by], [bx + 170, by - 32 - glance * 28], [bx + 170, by + 18]], '#e0e9cd');
-  ctx.restore();
-  pixelGlow(ctx, bx, by, 24, '#e2eccb', 0.28);
-  // Front jambs/lintel pass in front of the emerging rig; interior gloom lifts
-  // only as he rolls through the mouth.
-  ctx.drawImage(layers.portalFront, PORTAL.x, PORTAL.y);
-  const gloom = 1 - finish((t - 0.5) / 2.1);
+  const s = walker.s;
+  const supportY = walker.deck;
+  const drawWalker = () => {
+    ellipse(ctx, walker.x, supportY + 1, 15 * s, 2, 'rgba(2,12,17,0.5)');
+    heroRobot(ctx, {
+      x: walker.x, y: supportY - 15 * s - 0.55, s, t,
+      state: t < 9.6 ? 'idle' : 'happy', chassisMotion: false, paintMix: 1,
+      drill: true, drillAngle: 0.22, drillExtend: 0.12,
+      drillSpin: 0, wheelPhase: walker.travel * 24, eye: t > 9.6 ? 'normal' : 'scan', look: 1,
+    });
+    const bx = walker.x + 4 * s, by = supportY - 27 * s;
+    ctx.save(); ctx.globalAlpha = 0.08;
+    polygon(ctx, [[bx, by], [bx + 170, by - 32], [bx + 170, by + 18]], '#e0e9cd');
+    ctx.restore();
+    pixelGlow(ctx, bx, by, 24, '#e2eccb', 0.28);
+  };
+  // Inside/exit: rig is behind the timber frame. Once his treads are below the
+  // footings he is closer to camera, so he passes IN FRONT of the right leg.
+  if (!walker.inFront) {
+    drawWalker();
+    ctx.drawImage(layers.portalFront, PORTAL.x, PORTAL.y);
+  } else {
+    ctx.drawImage(layers.portalFront, PORTAL.x, PORTAL.y);
+    drawWalker();
+  }
+  const gloom = 1 - walker.rollOut;
   if (gloom > 0.01) {
     ctx.save();
     ctx.beginPath(); ctx.rect(PORTAL.opening.x, PORTAL.opening.y, PORTAL.opening.w, PORTAL.opening.h); ctx.clip();
-    ctx.globalAlpha = gloom * 0.78; px(ctx, PORTAL.opening.x, PORTAL.opening.y, PORTAL.opening.w, PORTAL.opening.h, '#0a1418');
+    ctx.globalAlpha = gloom * 0.7; px(ctx, PORTAL.opening.x, PORTAL.opening.y, PORTAL.opening.w, PORTAL.opening.h, '#0a1418');
     ctx.restore();
   }
   for (const [x, y, phase] of [[1464, 470, 0], [1505, 497, 2], [1390, 558, 4]]) {
@@ -567,14 +600,10 @@ export function drawCalderaScene(ctx: CanvasRenderingContext2D, t: number) {
   px(ctx, 0, 0, 640, 12, '#07121a'); px(ctx, 0, 348, 640, 12, '#07121a');
   if (t > 14.2) {
     ctx.save(); ctx.globalAlpha = finish((t - 14.2) / 1.6);
-    ctx.textAlign = 'left'; ctx.font = '6px "Press Start 2P", monospace';
-    ctx.fillStyle = '#9ebbb7'; ctx.fillText('186 METERS BELOW / FIRST SHIFT', 25, 34);
-    ctx.font = '20px "Press Start 2P", monospace';
+    ctx.textAlign = 'left'; ctx.font = '20px "Press Start 2P", monospace';
     ctx.fillStyle = '#081a23'; ctx.fillText('SULFURED CAVES', 27, 66);
     ctx.fillStyle = '#e6d8a8'; ctx.fillText('SULFURED CAVES', 25, 64);
     px(ctx, 25, 78, 72, 1, '#c7b681');
-    ctx.font = '6px "Press Start 2P", monospace';
-    ctx.fillStyle = '#b2c8bd'; ctx.fillText('THE HEART OF SULFUR. POWER FOR A NEW HOME.', 25, 93);
     ctx.restore();
   }
 }

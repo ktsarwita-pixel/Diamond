@@ -42,7 +42,7 @@ try {
   await page.waitForFunction(() => document.querySelector('.cinematic-top')?.textContent?.includes('01 /'));
 
   const report = await page.evaluate(async () => {
-    const { CUTSCENE, prepareScene, promiseBeatAt, promiseContact } = await import('/src/game/cutscene.ts');
+    const { CUTSCENE, prepareScene, promiseBeatAt, promiseContact, promiseCellAt, promiseGripperAt } = await import('/src/game/cutscene.ts');
     const { scientistDepartureAt, disposalPoseAt } = await import('/src/game/cutscene.ts');
     const { DISPOSAL_DURATION, disposalJob, disposalCameraAt } = await import('/src/game/sceneDisposal.ts');
     const { calderaWalkerAt, calderaJob, riftGeometry, riftCameraAt } = await import('/src/game/sceneCaldera.ts');
@@ -189,15 +189,21 @@ try {
     g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, 640, 360);
     CUTSCENE[9].draw(g, 5.2, CUTSCENE[9].duration);
     g.fillText = oldFillText;
+    const handoffGap = Math.max(...promiseSamples.map((p, i) => {
+      if (!p.accepted) return 0;
+      const cell = promiseCellAt(i * 0.05), wrist = promiseGripperAt(i * 0.05);
+      return Math.hypot(cell[0] - wrist[0], cell[1] - wrist[1]);
+    }));
     const promiseScene = {
       noServiceHud: !promiseTexts.some(text => /CELL|ACCEPTED|POWER|SCAN|VIABLE|DEPOSIT/i.test(text)),
-      physicalPort: promiseSamples.every(p => (p.cellCharge === 0 || p.seat > 0.9) && (p.ready === 0 || p.cellCharge > 0.99)),
+      noRemoteHatch: promiseSamples.every(p => !('portOpen' in p) && !('cellCharge' in p)),
+      cellFollowsGripper: handoffGap < 0.01,
+      shortCarryOnly: Math.max(...promiseSamples.map((p, i) => promiseCellAt(i * 0.05)[0] - offerCore[0])) < 25,
+      gripBeforeRelease: promiseSamples.every((p, i) => !p.accepted || p.grip > 0.99),
       contactGap: Math.hypot(offerCore[0] - gripper[0], offerCore[1] - gripper[1]),
       continuity: promiseSamples[0].maraX === 396 && promiseSamples[0].cubeX === 548 && promiseSamples[0].gusX === 344 && promiseSamples[0].ilseX === 452,
       singleOwner: promiseSamples.every((p, i) => p.accepted === (i * 0.05 >= 3.6)),
-      seatMonotonic: promiseSamples.every((p, i) => i === 0 || p.seat >= promiseSamples[i - 1].seat),
-      chargeMonotonic: promiseSamples.every((p, i) => i === 0 || p.charge >= promiseSamples[i - 1].charge),
-      readyOnlyAfterCharge: promiseSamples.every(p => p.ready === 0 || p.charge > 0.99),
+      readyOnlyAfterCarry: promiseSamples.every(p => p.ready === 0 || p.carry > 0.99),
       phases: [...new Set(promiseSamples.map(p => p.phase))].join(','),
     };
     const flightRig = (time, lowHull, groundY) => {
@@ -376,19 +382,21 @@ try {
     const lanePixels = portalFront.getImageData(lane.x - portal.x, lane.y - portal.y, lane.w, lane.h).data;
     let laneOpaque = 0;
     for (let i = 3; i < lanePixels.length; i += 4) if (lanePixels[i] > 8) laneOpaque++;
+    const mouthBottom = portal.opening.y + portal.opening.h;
     const riftStory = {
-      startsInAdit: riftArrival[0].x > portal.opening.x && riftArrival[0].x < portal.opening.x + portal.opening.w,
-      deckMeetsMouth: Math.abs(riftArrival[0].deck - (portal.opening.y + portal.opening.h)) < 6,
+      startsInAdit: riftArrival[0].phase === 'inside' && riftArrival[0].x > portal.opening.x && riftArrival[0].x < portal.opening.x + portal.opening.w && riftArrival[0].deck < mouthBottom,
+      deckMeetsMouth: Math.abs(riftArrival.find(p => p.phase === 'scan').deck - mouthBottom) < 1,
       monotonic: riftArrival.every((p, i) => i === 0 || p.x >= riftArrival[i - 1].x),
       supported: riftArrival.every(p => p.supported),
-      scanThenAdvance: riftArrival.find(p => p.x >= 420).x < riftArrival[riftArrival.length - 1].x,
-      noExitPillar: !('rightReturn' in portal),
+      scanThenAdvance: riftArrival.some(p => p.phase === 'scan') && riftArrival[riftArrival.length - 1].x > 600,
+      postsFrameOpening: portal.leftJamb.x + portal.leftJamb.w <= portal.opening.x && portal.rightJamb.x >= portal.opening.x + portal.opening.w,
       clearTravelLane: laneOpaque === 0,
-      exitsWithoutClipping: riftArrival.every(p => {
-        const s = 1.5 + 0.35 * Math.min(1, Math.max(0, (p.x - 176) / 90)) ** 3;
-        const left = p.x - 13 * s, top = p.deck - 28 * s;
-        return left < portal.opening.x || (left >= portal.leftJamb.x + portal.leftJamb.w && top > portal.lintel.y + portal.lintel.h);
+      exitsBetweenPosts: riftArrival.filter(p => p.phase !== 'advance').every(p => {
+        const left = p.x - 14 * p.s, right = p.x + 23 * p.s, top = p.deck - 29 * p.s;
+        return left > portal.opening.x && right < portal.opening.x + portal.opening.w && top > portal.lintel.y + portal.lintel.h;
       }),
+      turnsOnlyInFront: riftArrival.every(p => !p.inFront || p.rollOut >= 1) && riftArrival.find(p => p.inFront).deck > portal.postBase + 8,
+      inFrontLatches: riftArrival.every((p, i) => !p.inFront || riftArrival.slice(i).every(q => q.inFront)),
     };
     return {
       sceneResults, buildings, humans, opened, moved, connectivity, liteScenes, scene3Grounding,
@@ -418,8 +426,8 @@ try {
   assert.equal(report.renderedRockComponents, 1, 'Detached rock or mineral pixels in the final cliff layer');
   assert.equal(report.renderedLedgeComponents, 1, 'Detached rock fragments beside the walking ledge');
   assert.ok(report.promiseScene.contactGap < 0.75, `Cell misses CUBE's gripper by ${report.promiseScene.contactGap}px`);
-  assert.ok(report.promiseScene.noServiceHud && report.promiseScene.physicalPort, `Promise still uses a fake service HUD or nonphysical intake: ${JSON.stringify(report.promiseScene)}`);
-  assert.ok(report.promiseScene.continuity && report.promiseScene.singleOwner && report.promiseScene.seatMonotonic && report.promiseScene.chargeMonotonic && report.promiseScene.readyOnlyAfterCharge, `Promise staging/ownership/power order is broken: ${JSON.stringify(report.promiseScene)}`);
+  assert.ok(report.promiseScene.noServiceHud && report.promiseScene.noRemoteHatch && report.promiseScene.cellFollowsGripper && report.promiseScene.shortCarryOnly && report.promiseScene.gripBeforeRelease, `Promise handoff is not a single visible cell held by the gripper: ${JSON.stringify(report.promiseScene)}`);
+  assert.ok(report.promiseScene.continuity && report.promiseScene.singleOwner && report.promiseScene.readyOnlyAfterCarry, `Promise staging/ownership order is broken: ${JSON.stringify(report.promiseScene)}`);
   assert.equal(report.promiseScene.phases, 'approach,offer,transfer,accept,home');
   for (const [key, value] of Object.entries(report.lowHullFlight)) assert.ok(value, `Low-hull flight check failed: ${key}`);
   for (const [key, value] of Object.entries(report.riftStory)) assert.ok(value, `Rift arrival check failed: ${key}`);
@@ -473,7 +481,7 @@ try {
     await mobile.close();
   }
   assert.deepEqual(errors, [], 'No browser runtime errors are allowed');
-  console.log(`PASS: promise handoff without fake HUD, clear-side adit exit, low-hull flight misfires, disposal contact/pivot/release, tram boarding, supported connected rocks, ${report.groundContact.samples} planted low-health poses, all 12 HD/Lite scenes, buildings, interactions, controls, and mobile layouts.`);
+  console.log(`PASS: gripped cell handoff without hatch/HUD, framed adit exit, low-hull flight misfires, disposal contact/pivot/release, tram boarding, supported connected rocks, ${report.groundContact.samples} planted low-health poses, all 12 HD/Lite scenes, buildings, interactions, controls, and mobile layouts.`);
 } finally {
   await browser.close();
 }

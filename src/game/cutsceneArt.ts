@@ -617,10 +617,8 @@ export interface HeroRobotOpts {
   serviceArm?: number;
   /** Local vertical offset of the service wrist so it can meet a human palm exactly. */
   serviceArmY?: number;
-  /** 0..1 physical front intake shutter (Scene 10 power-cell handoff). */
-  cellPort?: number;
-  /** 0..1 charge shown by tiny hull lamps after the cell is seated. */
-  cellCharge?: number;
+  /** 0 = open jaws, 1 = closed around a held object (Scene 10 handoff). */
+  serviceGrip?: number;
   /** Disable free idle bob when a shot supplies exact physical contact poses. */
   chassisMotion?: boolean;
 }
@@ -839,17 +837,18 @@ export function heroRobot(ctx: CanvasRenderingContext2D, o: HeroRobotOpts) {
     }
   }
 
-  // Articulated front service manipulator arm (used in Scene 10 handshake)
+  // Articulated front service manipulator. The jaws close on the offered cell;
+  // there is no remote hatch — the same wrist carries the cell back to the hull.
   if ((o.serviceArm ?? 0) > 0.02) {
     const ext = clamp(o.serviceArm ?? 0);
-    const armLen = Math.round(3 + ext * 7);
+    const armLen = 3 + ext * 7;
     const ay = o.serviceArmY ?? 0;
+    const grip = clamp(o.serviceGrip ?? 0);
     P(8, ay, armLen, 3, INK);
     P(8, ay + 1, armLen - 1, 1, '#94a3b8');
-    // Small two-pronged wrist gripper
     P(8 + armLen - 1, ay - 1, 3, 5, INK);
-    P(8 + armLen, ay - 1, 2, 1, '#cbd5e1');
-    P(8 + armLen, ay + 3, 2, 1, '#cbd5e1');
+    P(8 + armLen, ay - 1 + grip * 1.2, 2, 1, '#cbd5e1');
+    P(8 + armLen, ay + 3 - grip * 1.2, 2, 1, '#cbd5e1');
   }
   // shoulder plate
   P(-10, -6, 4, 7, '#59606e');
@@ -862,26 +861,6 @@ export function heroRobot(ctx: CanvasRenderingContext2D, o: HeroRobotOpts) {
   P(-5, 1, 4, 2, lit('#f2b718'));
   P(-5, 1, 4, 1, '#fff0a8');
   P(-7, 0, 1, 3, '#f4c278');
-  // Recessed front intake: a real shutter slides open, the cell disappears into
-  // the slot, then the shutter closes and small hull lamps show restored power.
-  const cellPort = clamp(o.cellPort ?? 0);
-  const cellCharge = clamp(o.cellCharge ?? 0);
-  if (cellPort > 0.01 || cellCharge > 0.01) {
-    P(-8, 0, 7, 5, INK);
-    P(-7, 1, 5, 3, '#10151c');
-    if (cellCharge > 0.02) {
-      P(-6, 2, 3, 1, mix('#6b4a12', '#ffe08a', cellCharge));
-      glowAt(ctx, -5, 2, 5, '#ffd166', 0.18 * cellCharge);
-    }
-    const shutter = Math.round(3 * (1 - cellPort));
-    if (shutter > 0) {
-      P(-7, 1, 5, shutter, '#6b7280');
-      P(-7, 1, 5, 1, '#9ca3af');
-    }
-    for (let i = 0; i < 3; i++) {
-      P(2 + i * 2, 3, 1, 1, cellCharge > (i + 1) / 3 ? '#86efac' : '#27323a');
-    }
-  }
   // An idle power heartbeat is slow and legible, not a noisy full-body flicker.
   if (state === 'idle') {
     const beat = Math.pow(Math.max(0, Math.sin(t * 1.35 - 0.35)), 7);
